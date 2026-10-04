@@ -36,13 +36,18 @@ class FakeApis:
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.urls: list[str] = []
         self.transport = httpx.MockTransport(self.handle)
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(f"{request.url.host}{request.url.path}")
+        self.urls.append(str(request.url))
         host, path = request.url.host, request.url.path
         if host == "graphql.anilist.co":
             body = json.loads(request.content)
+            if body["variables"].get("search") == "S1":
+                # So passiert bei Striker: Ordner "S1" -> AniList findet "Major S1"
+                return httpx.Response(200, json={"data": {"Page": {"media": [_media(627, 627, "Major S1", None)]}}})
             if "search" in body["variables"]:
                 media = [_media(S1_ID, MAL_ID, "Horimiya", S2_ID)]
                 return httpx.Response(200, json={"data": {"Page": {"media": media}}})

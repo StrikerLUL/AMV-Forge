@@ -127,6 +127,9 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    if not args.verbose:
+        # httpx loggt sonst jede einzelne Anfrage
+        logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         if args.command == "quick":
             run_quick(args)

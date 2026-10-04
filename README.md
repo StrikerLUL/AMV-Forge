@@ -18,9 +18,9 @@ Die komplette Projektbeschreibung und Roadmap steht in [CLAUDE.md](CLAUDE.md).
 
 ### So läuft `index` (Phase 2)
 
-1. **Folgen holen** (`backend/sources/folder.py`, `backend/sources/jellyfin.py`): Im Ordner-Modus wird die Folgennummer aus dem Dateinamen gelesen (`S01E03`, `- 03`, `Episode 3` …). Bei Jellyfin werden die Folgen einmal nach `data/cache/episodes/` heruntergeladen.
-2. **Metadaten** (`backend/sources/anilist.py`, `jikan.py`): AniList liefert MAL-ID, Genres, Tags und die Hauptfiguren mit Bild (für Phase 5). Für Staffel 2+ folgt das Tool den „Sequel“-Verknüpfungen ab Staffel 1. Jikan markiert Filler- und Recap-Folgen.
-3. **OP/ED finden** (`backend/sources/aniskip.py`, `backend/analysis/audio/op_ed_detect.py`): Zuerst AniSkip. Fehlt dort etwas, vergleicht das Tool den Ton der Folge mit den Nachbarfolgen: Dieselbe Musik über 40–130 Sekunden ist das Opening bzw. Ending.
+1. **Folgen holen** (`backend/sources/folder.py`, `backend/sources/jellyfin.py`): Im Ordner-Modus wird die Folgennummer aus dem Dateinamen gelesen (`S01E03`, `01x03`, `- 03`, `Episode 3` …). Der Titel für AniList kommt aus dem Ordnernamen; heißt der Ordner nur `S1` oder `Season 1`, aus dem Ordner darüber. Bei Jellyfin werden die Folgen einmal nach `data/cache/episodes/` heruntergeladen.
+2. **Metadaten** (`backend/sources/anilist.py`, `jikan.py`): AniList liefert MAL-ID, Genres, Tags und die Hauptfiguren mit Bild (für Phase 5). Passt kein Suchtreffer gut zum Titel, nimmt das Tool lieber gar keinen und zeigt die Kandidaten mit ID an. Für Staffel 2+ folgt das Tool den „Sequel“-Verknüpfungen ab Staffel 1. Jikan markiert Filler- und Recap-Folgen. Antwortet ein Dienst nicht, wird er nach einem zweiten Versuch für den Rest des Laufs übersprungen.
+3. **OP/ED finden** (`backend/sources/aniskip.py`, `backend/analysis/audio/op_ed_detect.py`): AniSkip bekommt die echte Länge deiner Datei, Zeiten aus deutlich längeren oder kürzeren Fassungen werden verworfen. Zusätzlich vergleicht das Tool den Ton jeder Folge mit den Nachbarfolgen: Dieselbe Musik über 40–130 Sekunden ist das Opening bzw. Ending. Stimmen beide überein, wird beides zusammen rausgeschnitten; widersprechen sie sich, gewinnt der Audio-Vergleich, weil er auf deiner Datei gemessen ist.
 4. **Szenen** wie in Phase 1, danach werden OP/ED/Recap herausgeschnitten (`backend/analysis/intervals.py`). Was übrig bleibt, sind die Clips in der Tabelle `clip`.
 5. **Merken, was fertig ist** (`backend/indexer.py`): Jede Folge speichert, ob OP/ED und Szenen schon berechnet sind, und einen Fingerabdruck aus Dateigröße, Änderungszeit und Einstellungen. Ändert sich nichts, wird nichts neu gerechnet. Alle API-Antworten liegen in der Tabelle `apicache`.
 
@@ -61,10 +61,10 @@ Alle Standardwerte (Schnittrate, Szenen-Empfindlichkeit, Auflösung, Qualität) 
 
 ## Benutzung: ganze Staffel (Phase 2)
 
-Aus einem Ordner (Folgennummer kommt aus dem Dateinamen, Titel aus dem Ordnernamen):
+Aus einem Ordner (Folgennummer kommt aus dem Dateinamen, Titel aus dem Ordnernamen bzw. dem Ordner darüber):
 
 ```powershell
-python -m backend.cli index --source folder --path "D:\Anime\Horimiya"
+python -m backend.cli index --source folder --path "P:\Anime\Horimiya\S1"
 ```
 
 Aus Jellyfin (vorher `.env` aus `.env.example` anlegen):
@@ -89,7 +89,7 @@ python -m backend.cli status --season 1
 | `--no-api` | Ohne Internet: keine Metadaten, OP/ED nur per Audio-Vergleich |
 | `--force` | Alles neu berechnen |
 
-Die Einstellungen für OP/ED-Erkennung, Rate-Limits und Download-Ordner stehen in `backend/config/default.yaml`.
+Die Einstellungen für OP/ED-Erkennung, Rate-Limits, Timeouts und Download-Ordner stehen in `backend/config/default.yaml`. Eine eigene YAML für `--config` muss nur die Werte enthalten, die du ändern willst.
 Tipp: Liegt das Repo in OneDrive, setz `index.download_dir` auf einen Ordner außerhalb, sonst lädt OneDrive die heruntergeladenen Folgen mit hoch.
 
 ## Tests

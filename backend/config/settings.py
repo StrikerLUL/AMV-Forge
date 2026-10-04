@@ -56,7 +56,11 @@ class ApiSettings:
     jikan_interval: float
     aniskip_interval: float
     timeout_seconds: float
+    connect_timeout_seconds: float
+    connection_retries: int
     max_retries: int
+    anilist_min_title_score: float
+    aniskip_max_length_diff: float
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,7 @@ class OpEdSettings:
     similarity: float
     max_gap_seconds: float
     silence_db: float
+    min_overlap: float
 
 
 @dataclass(frozen=True)
@@ -81,9 +86,22 @@ class Settings:
     op_ed: OpEdSettings
 
 
+def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Legt die eigenen Werte über die Standardwerte, auch in verschachtelten Abschnitten."""
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
 def load_settings(path: Path | None = None) -> Settings:
-    """Liest die YAML-Datei (Standard: backend/config/default.yaml)."""
-    raw: dict[str, Any] = yaml.safe_load((path or DEFAULT_CONFIG).read_text(encoding="utf-8"))
+    """Liest backend/config/default.yaml. Eine eigene YAML muss nur die Werte enthalten, die sie ändert."""
+    raw: dict[str, Any] = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    if path is not None:
+        raw = _merge(raw, yaml.safe_load(path.read_text(encoding="utf-8")) or {})
     index = raw["index"]
     return Settings(
         quick=QuickSettings(**raw["quick"]),

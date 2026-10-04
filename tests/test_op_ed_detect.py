@@ -1,6 +1,6 @@
 import numpy as np
 
-from backend.analysis.audio.op_ed_detect import FEATURE_SR, Fingerprint, find_shared_segment, fingerprint
+from backend.analysis.audio.op_ed_detect import FEATURE_SR, Fingerprint, find_shared_segment, fingerprint, reconcile
 
 FPS = 5.0
 
@@ -65,3 +65,18 @@ def test_real_audio_with_noise_around_the_opening() -> None:
     )
     assert seg is not None
     assert abs(seg.start_a - 15) < 1.5 and abs(seg.end_a - 75) < 1.5
+
+
+def test_reconcile_single_source() -> None:
+    assert reconcile((10, 100), None, 0.5) == ((10, 100), "aniskip")
+    assert reconcile(None, (12, 101), 0.5) == ((12, 101), "fingerprint")
+    assert reconcile(None, None, 0.5) is None
+
+
+def test_reconcile_agreeing_sources_are_combined() -> None:
+    assert reconcile((10, 100), (12, 101), 0.5) == ((10, 101), "aniskip+fingerprint")
+
+
+def test_reconcile_conflict_trusts_audio() -> None:
+    # So bei Striker: AniSkip sagt OP 0:00-1:40, die Musik läuft aber bei 2:28-3:58
+    assert reconcile((0, 100), (148, 239), 0.5) == ((148, 239), "fingerprint")

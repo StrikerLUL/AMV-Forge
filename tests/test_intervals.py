@@ -1,4 +1,4 @@
-from backend.analysis.intervals import merge, subtract
+from backend.analysis.intervals import merge, overlap_ratio, subtract
 
 
 def test_merge_overlapping() -> None:
@@ -21,3 +21,9 @@ def test_subtract_drops_short_rests() -> None:
 
 def test_subtract_without_cuts() -> None:
     assert subtract([(0, 5)], []) == [(0, 5)]
+
+
+def test_overlap_ratio() -> None:
+    assert overlap_ratio((0, 10), (0, 10)) == 1.0
+    assert overlap_ratio((0, 10), (5, 15)) == 5 / 15
+    assert overlap_ratio((0, 10), (20, 30)) == 0.0

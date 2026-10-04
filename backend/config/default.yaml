@@ -47,7 +47,16 @@ apis:
   jikan_interval: 1.1
   aniskip_interval: 0.5
   timeout_seconds: 30
+  # So lange wird auf den Verbindungsaufbau gewartet. Antwortet ein Dienst gar nicht,
+  # wird er nach einem weiteren Versuch für den Rest des Laufs übersprungen.
+  connect_timeout_seconds: 5
+  connection_retries: 1
+  # Wiederholungen bei Rate-Limit (HTTP 429) oder Serverfehlern (5xx).
   max_retries: 4
+  # AniList-Treffer müssen so gut zum Suchbegriff passen (0-1), sonst lieber --anilist-id.
+  anilist_min_title_score: 0.75
+  # AniSkip-Zeiten aus Dateien, die mehr als so viele Sekunden länger/kürzer sind, werden verworfen.
+  aniskip_max_length_diff: 15
 
 op_ed:
   # Fallback, wenn AniSkip nichts weiß: gleiche Musik in zwei Folgen suchen.
@@ -58,3 +67,6 @@ op_ed:
   similarity: 0.90         # ab wann zwei Momente als "gleiche Musik" gelten (0-1)
   max_gap_seconds: 2.0     # kurze Aussetzer im Treffer werden überbrückt
   silence_db: -45          # leisere Stellen zählen nicht (Stille ist in jeder Folge gleich)
+  # Finden AniSkip und Audio-Vergleich beide ein OP/ED, müssen sie sich so stark überlappen (0-1).
+  # Sonst gewinnt der Audio-Vergleich, weil er auf deiner Datei gemessen ist.
+  min_overlap: 0.5
