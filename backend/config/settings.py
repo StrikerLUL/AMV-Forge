@@ -76,6 +76,57 @@ class OpEdSettings:
 
 
 @dataclass(frozen=True)
+class MusicSettings:
+    analyzer: str
+    sample_rate: int
+    beats_per_bar: int
+    allin1_work_dir: Path
+    energy_rate: float
+    energy_weights: dict[str, float]
+    energy_smooth_seconds: float
+    min_section_bars: int
+    novelty_bars: int
+    novelty_threshold: float
+    chorus_energy: float
+    calm_energy: float
+    drop_window_bars: float
+    drop_min_jump: float
+    drop_min_level: float
+    drop_min_distance_bars: float
+    max_drops: int
+
+
+@dataclass(frozen=True)
+class CutSettings:
+    beats_per_cut: dict[str, float]
+    drop: float
+    drop_bars: float
+    buildup_bars: float
+    buildup_from: float
+    buildup_to: float
+    min_cut_seconds: float
+    drop_position: float
+
+
+@dataclass(frozen=True)
+class MotionSettings:
+    fps: float
+    width: int
+    height: int
+    edge_seconds: float
+    peak_smooth: int
+    cache_dir: Path
+    hwaccel: str
+
+
+@dataclass(frozen=True)
+class PlannerSettings:
+    match_intensity: bool
+    pick_from_top: int
+    max_same_episode_in_row: int
+
+
+@dataclass(frozen=True)
 class Settings:
     quick: QuickSettings
     scenes: SceneSettings
@@ -84,6 +135,10 @@ class Settings:
     index: IndexSettings
     apis: ApiSettings
     op_ed: OpEdSettings
+    music: MusicSettings
+    cuts: CutSettings
+    motion: MotionSettings
+    planner: PlannerSettings
 
 
 def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -116,4 +171,8 @@ def load_settings(path: Path | None = None) -> Settings:
         ),
         apis=ApiSettings(**raw["apis"]),
         op_ed=OpEdSettings(**raw["op_ed"]),
+        music=MusicSettings(**{**raw["music"], "allin1_work_dir": Path(raw["music"]["allin1_work_dir"])}),
+        cuts=CutSettings(**raw["cuts"]),
+        motion=MotionSettings(**{**raw["motion"], "cache_dir": Path(raw["motion"]["cache_dir"])}),
+        planner=PlannerSettings(**raw["planner"]),
     )

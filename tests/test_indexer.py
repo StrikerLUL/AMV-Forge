@@ -40,7 +40,7 @@ def test_index_twice_computes_nothing_the_second_time(tmp_path: Path, monkeypatc
     source = scan_folder(folder, settings.index.video_extensions)
 
     first = index_season(source, settings, engine, make_apis(engine, settings.apis, fake.transport))
-    assert first.scenes_computed == 2 and first.skips_computed == 2
+    assert first.scenes_computed == 2 and first.skips_computed == 2 and first.motion_computed == 2
     assert first.metadata_fetched and first.api_requests > 0
 
     with Session(engine) as session:
@@ -54,6 +54,10 @@ def test_index_twice_computes_nothing_the_second_time(tmp_path: Path, monkeypatc
                  for c in session.exec(select(Clip).where(Clip.episode_id == ep1.id).order_by(Clip.start))]
         # testsrc hat keinen Schnitt: eine Szene 0-20 s, OP 2-8 s und ED 15-19 s fliegen raus
         assert clips == [(0.0, 2.0), (8.0, 15.0), (19.0, 20.0)]
+        # Phase 3: jeder Clip hat Bewegung und einen Peak innerhalb des Clips
+        for clip in session.exec(select(Clip)):
+            assert clip.motion is not None and clip.motion_peak is not None
+            assert clip.start <= clip.motion_peak <= clip.end
 
     fake.calls.clear()
     second = index_season(

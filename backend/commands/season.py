@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sqlmodel import Session, func, select
 
+from backend.commands.common import fmt_time
 from backend.config.settings import Settings
 from backend.db import get_engine
 from backend.db.models import Character, Clip, Episode, Season, SkipSegment
@@ -31,13 +32,16 @@ def add_season_commands(sub: argparse._SubParsersAction) -> None:  # type: ignor
     index.add_argument("--no-api", action="store_true", help="Ohne AniList/Jikan/AniSkip, OP/ED nur per Audio-Vergleich")
     index.add_argument("--force", action="store_true", help="Alles neu berechnen")
     index.add_argument("--config", type=Path, default=None, help="Eigene YAML statt backend/config/default.yaml")
+    index.set_defaults(handler=run_index)
 
     status = sub.add_parser("status", help="Zeigt, was in der Datenbank liegt")
     status.add_argument("--season", type=int, help="DB-ID einer Staffel für Details pro Folge")
     status.add_argument("--config", type=Path, default=None)
+    status.set_defaults(handler=run_status)
 
     search = sub.add_parser("jellyfin-search", help="Serie in Jellyfin suchen und Staffel-IDs anzeigen")
     search.add_argument("term", help="Suchbegriff, z. B. Horimiya")
+    search.set_defaults(handler=run_jellyfin_search)
 
 
 def run_index(args: argparse.Namespace, settings: Settings) -> None:
@@ -70,13 +74,10 @@ def run_index(args: argparse.Namespace, settings: Settings) -> None:
         log.info("Nichts neu berechnet, alles kam aus der Datenbank.")
         return
     by_source = ", ".join(f"{k}: {v}" for k, v in sorted(report.skips_by_source.items())) or "-"
-    log.info("Neu berechnet: OP/ED %d (%s), Szenen %d, Downloads %d, API-Anfragen %d",
-             report.skips_computed, by_source, report.scenes_computed, report.downloads, report.api_requests)
+    log.info("Neu berechnet: OP/ED %d (%s), Szenen %d, Bewegung %d, Downloads %d, API-Anfragen %d",
+             report.skips_computed, by_source, report.scenes_computed, report.motion_computed, report.downloads,
+             report.api_requests)
     log.info("Details: python -m backend.cli status --season %d", report.season_id)
-
-
-def _fmt_time(seconds: float) -> str:
-    return f"{int(seconds // 60):02d}:{seconds % 60:04.1f}"
 
 
 def run_status(args: argparse.Namespace, settings: Settings) -> None:
@@ -110,19 +111,21 @@ def run_status(args: argparse.Namespace, settings: Settings) -> None:
         ).all()
         if main_chars:
             log.info("Hauptfiguren: %s", ", ".join(c.name for c in main_chars))
-        log.info("%-4s %-8s %-15s %-15s %-20s %6s  %s", "Nr", "Länge", "OP", "ED", "Quelle", "Clips", "Titel")
+        log.info("%-4s %-8s %-15s %-15s %-20s %6s %-9s %s", "Nr", "Länge", "OP", "ED", "Quelle", "Clips",
+                 "Bewegung", "Titel")
         for ep in session.exec(select(Episode).where(Episode.season_id == season.id).order_by(Episode.number)):
             skips = session.exec(select(SkipSegment).where(SkipSegment.episode_id == ep.id)).all()
 
             def span(kinds: set[str]) -> str:
                 hit = next((s for s in skips if s.kind in kinds), None)
-                return f"{_fmt_time(hit.start)}-{_fmt_time(hit.end)}" if hit else "-"
+                return f"{fmt_time(hit.start)}-{fmt_time(hit.end)}" if hit else "-"
 
             clips = session.exec(select(func.count(Clip.id)).where(Clip.episode_id == ep.id)).one()
             flags = " [Filler]" if ep.filler else (" [Recap]" if ep.recap else "")
-            log.info("%-4d %-8s %-15s %-15s %-20s %6d  %s%s", ep.number,
-                     _fmt_time(ep.duration) if ep.duration else "-", span({"op", "mixed-op"}),
-                     span({"ed", "mixed-ed"}), ep.skips_source or "offen", clips, ep.title or "", flags)
+            log.info("%-4d %-8s %-15s %-15s %-20s %6d %-9s %s%s", ep.number,
+                     fmt_time(ep.duration) if ep.duration else "-", span({"op", "mixed-op"}),
+                     span({"ed", "mixed-ed"}), ep.skips_source or "offen", clips,
+                     "ja" if ep.motion_signature else "offen", ep.title or "", flags)
 
 
 def run_jellyfin_search(args: argparse.Namespace, settings: Settings) -> None:
