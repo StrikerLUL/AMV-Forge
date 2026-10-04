@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -24,24 +22,6 @@ class RenderOptions:
     preset: str
     audio_bitrate: str
     with_music: bool = True
-
-
-def require_ffmpeg() -> None:
-    """Bricht mit klarer Meldung ab, wenn ffmpeg/ffprobe nicht im PATH sind."""
-    missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
-    if missing:
-        raise RuntimeError(f"Nicht im PATH gefunden: {', '.join(missing)}. Bitte ffmpeg installieren.")
-
-
-def probe_duration(path: Path) -> float:
-    """Länge einer Video- oder Audiodatei in Sekunden."""
-    out = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    return float(json.loads(out)["format"]["duration"])
 
 
 def frame_counts(assignments: list[Assignment], fps: int) -> list[int]:

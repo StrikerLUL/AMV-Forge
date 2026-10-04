@@ -1,7 +1,9 @@
 """Kommandozeile für AMV-Forge.
 
-Beispiel:
+Beispiele:
     python -m backend.cli quick --video folge.mkv --song song.mp3 --length 30
+    python -m backend.cli index --source folder --path "D:\\Anime\\Horimiya"
+    python -m backend.cli status
 """
 
 from __future__ import annotations
@@ -16,10 +18,12 @@ from pathlib import Path
 
 from backend.analysis.music.beats import analyze_beats
 from backend.analysis.video.scenes import detect_scenes
+from backend.commands.season import add_season_commands, run_index, run_jellyfin_search, run_status
 from backend.config import load_settings
 from backend.planner.assign import assign_random, usable_scenes
 from backend.planner.slots import build_slots, choose_song_start
-from backend.render.ffmpeg_graph import RenderOptions, probe_duration, render_edit, require_ffmpeg
+from backend.media import probe_duration, require_ffmpeg
+from backend.render.ffmpeg_graph import RenderOptions, render_edit
 
 log = logging.getLogger("amv_forge")
 
@@ -49,6 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
     quick.add_argument("--preview", action="store_true", help="Schnelle 480p-Vorschau statt 1080x1920")
     quick.add_argument("--no-music", action="store_true", help="Ohne eingebrannte Musik exportieren (für TikTok-Sounds)")
     quick.add_argument("--config", type=Path, default=None, help="Eigene YAML statt backend/config/default.yaml")
+
+    add_season_commands(sub)
     return parser
 
 
@@ -124,6 +130,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "quick":
             run_quick(args)
+        else:
+            settings = load_settings(getattr(args, "config", None))
+            commands = {"index": run_index, "status": run_status, "jellyfin-search": run_jellyfin_search}
+            commands[args.command](args, settings)
     except (RuntimeError, ValueError) as exc:
         log.error("%s", exc)
         return 1

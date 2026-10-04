@@ -38,17 +38,64 @@ class RenderSettings:
 
 
 @dataclass(frozen=True)
+class DatabaseSettings:
+    path: Path
+
+
+@dataclass(frozen=True)
+class IndexSettings:
+    source: str
+    video_extensions: tuple[str, ...]
+    download_dir: Path
+    min_clip_seconds: float
+
+
+@dataclass(frozen=True)
+class ApiSettings:
+    anilist_interval: float
+    jikan_interval: float
+    aniskip_interval: float
+    timeout_seconds: float
+    max_retries: int
+
+
+@dataclass(frozen=True)
+class OpEdSettings:
+    head_seconds: float
+    tail_seconds: float
+    min_seconds: float
+    max_seconds: float
+    similarity: float
+    max_gap_seconds: float
+    silence_db: float
+
+
+@dataclass(frozen=True)
 class Settings:
     quick: QuickSettings
     scenes: SceneSettings
     render: RenderSettings
+    database: DatabaseSettings
+    index: IndexSettings
+    apis: ApiSettings
+    op_ed: OpEdSettings
 
 
 def load_settings(path: Path | None = None) -> Settings:
     """Liest die YAML-Datei (Standard: backend/config/default.yaml)."""
     raw: dict[str, Any] = yaml.safe_load((path or DEFAULT_CONFIG).read_text(encoding="utf-8"))
+    index = raw["index"]
     return Settings(
         quick=QuickSettings(**raw["quick"]),
         scenes=SceneSettings(**raw["scenes"]),
         render=RenderSettings(**raw["render"]),
+        database=DatabaseSettings(path=Path(raw["database"]["path"])),
+        index=IndexSettings(
+            source=index["source"],
+            video_extensions=tuple(e.lower() for e in index["video_extensions"]),
+            download_dir=Path(index["download_dir"]),
+            min_clip_seconds=float(index["min_clip_seconds"]),
+        ),
+        apis=ApiSettings(**raw["apis"]),
+        op_ed=OpEdSettings(**raw["op_ed"]),
     )
