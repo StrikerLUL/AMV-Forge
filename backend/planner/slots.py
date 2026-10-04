@@ -12,6 +12,11 @@ class Slot:
 
     start: float
     end: float
+    # Ab Phase 3: Abschnitt (intro, verse, chorus, bridge, outro, buildup, drop) und Ziel-Intensität 0-1
+    section: str = ""
+    intensity: float = 0.5
+    # Zeitpunkte im Slot (ab Slot-Anfang), auf die ein Bewegungs-Peak passt, der beste zuerst.
+    hits: tuple[float, ...] = (0.0,)
 
     @property
     def duration(self) -> float:

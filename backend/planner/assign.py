@@ -1,10 +1,15 @@
-"""Phase 1: Jedem Slot einen zufälligen, passend langen Clip zuweisen."""
+"""Jedem Slot einen Clip zuweisen.
+
+Phase 1: zufällig (assign_random). Phase 3: Bewegung passend zur Song-Energie, und der stärkste
+Bewegungsmoment des Clips landet genau auf einem Beat (assign_to_beats).
+"""
 
 from __future__ import annotations
 
 import logging
 import random
 from dataclasses import dataclass
+from pathlib import Path
 
 from backend.analysis.video.scenes import Scene
 from backend.planner.slots import Slot
@@ -18,10 +23,30 @@ class Assignment:
 
     slot: Slot
     source_start: float
+    video: Path | None = None
+    episode: int | None = None
+    # True, wenn der Bewegungs-Peak des Clips genau auf einem Beat liegt
+    aligned: bool = False
 
     @property
     def source_end(self) -> float:
         return self.source_start + self.slot.duration
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """Ein Clip, der ins Edit darf (Szene ohne OP/ED)."""
+
+    video: Path
+    start: float
+    end: float
+    motion: float | None = None
+    peak: float | None = None  # Sekunden in der Folge
+    episode: int | None = None
+
+    @property
+    def duration(self) -> float:
+        return self.end - self.start
 
 
 def usable_scenes(
@@ -74,3 +99,82 @@ def assign_random(
         used.add(idx)
         assignments.append(Assignment(slot=slot, source_start=source_start))
     return assignments
+
+
+def align_start(cand: Candidate, slot: Slot) -> tuple[float, bool]:
+    """Wo im Clip beginnt der Ausschnitt? Wenn möglich so, dass der Bewegungs-Peak auf einem Beat liegt.
+
+    slot.hits sind die Beats im Slot (ab Slot-Anfang), der Schnitt selbst (0.0) zuerst. Wir nehmen
+    den ersten, bei dem der Ausschnitt noch komplett im Clip liegt.
+    """
+    latest = cand.end - slot.duration
+    if cand.peak is not None:
+        for offset in slot.hits:
+            start = cand.peak - offset
+            if cand.start - 1e-6 <= start <= latest + 1e-6:
+                return min(max(start, cand.start), max(cand.start, latest)), True
+        return min(max(cand.peak - slot.hits[0], cand.start), max(cand.start, latest)), False
+    middle = cand.start + max(0.0, latest - cand.start) / 2
+    return middle, False
+
+
+def _motion_ranks(candidates: list[Candidate]) -> list[float]:
+    """Bewegung als Rang 0-1 (0 = ruhigster Clip, 1 = wildester). Ohne Messung: 0.5."""
+    measured = sorted((c.motion, i) for i, c in enumerate(candidates) if c.motion is not None)
+    ranks = [0.5] * len(candidates)
+    if len(measured) > 1:
+        for rank, (_, i) in enumerate(measured):
+            ranks[i] = rank / (len(measured) - 1)
+    return ranks
+
+
+def _can_align(cand: Candidate, slot: Slot) -> bool:
+    if cand.peak is None:
+        return False
+    latest = cand.end - slot.duration
+    return any(cand.start - 1e-6 <= cand.peak - o <= latest + 1e-6 for o in slot.hits)
+
+
+def assign_to_beats(
+    slots: list[Slot],
+    candidates: list[Candidate],
+    rng: random.Random,
+    match_intensity: bool = True,
+    pick_from_top: int = 8,
+    max_same_episode_in_row: int = 2,
+) -> list[Assignment]:
+    """Greedy, Slot für Slot: passend lange Clips, möglichst mit Peak auf dem Beat, Bewegung passend
+    zur Energie des Slots, kein Clip doppelt und nicht zu oft dieselbe Folge hintereinander."""
+    if not candidates:
+        raise ValueError("Keine Clips zur Auswahl.")
+    ranks = _motion_ranks(candidates)
+    used: set[int] = set()
+    result: list[Assignment] = []
+
+    for slot in slots:
+        pool = [i for i, c in enumerate(candidates) if c.duration >= slot.duration - 1e-6]
+        fresh = [i for i in pool if i not in used]
+        if fresh:
+            pool = fresh
+        elif pool:
+            log.debug("Alle passenden Clips schon benutzt, nehme einen doppelt.")
+        else:
+            longest = max(range(len(candidates)), key=lambda i: candidates[i].duration)
+            log.warning("Kein Clip ist %.2f s lang, nehme den längsten.", slot.duration)
+            pool = [longest]
+
+        recent = [a.episode for a in result[-max_same_episode_in_row:]] if max_same_episode_in_row > 0 else []
+        if len(recent) == max_same_episode_in_row and recent and len(set(recent)) == 1 and recent[0] is not None:
+            other = [i for i in pool if candidates[i].episode != recent[0]]
+            pool = other or pool
+
+        alignable = [i for i in pool if _can_align(candidates[i], slot)]
+        pool = alignable or pool
+        if match_intensity:
+            pool = sorted(pool, key=lambda i: (abs(ranks[i] - slot.intensity), i))[: max(1, pick_from_top)]
+        idx = rng.choice(pool)
+        used.add(idx)
+        cand = candidates[idx]
+        start, aligned = align_start(cand, slot)
+        result.append(Assignment(slot=slot, source_start=start, video=cand.video, episode=cand.episode, aligned=aligned))
+    return result

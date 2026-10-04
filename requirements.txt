@@ -10,5 +10,8 @@ python-dotenv>=1.0
 sqlmodel>=0.0.22
 httpx>=0.27
 
+# Phase 3: keine neuen Pflichtpakete. OpenCV (Optical Flow) kommt mit scenedetect, scipy mit librosa.
+# Optional für genauere Song-Analyse: allin1 (Anleitung in der README, unter Windows oft schwierig).
+
 # Tests
 pytest>=8.0

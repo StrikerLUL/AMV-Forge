@@ -47,6 +47,7 @@ class Episode(SQLModel, table=True):
     recap: bool = False
     skips_source: Optional[str] = None  # "aniskip", "fingerprint", "none" oder None = noch nicht gesucht
     scenes_signature: Optional[str] = None  # Fingerabdruck von Datei + Einstellungen + OP/ED
+    motion_signature: Optional[str] = None  # Phase 3: Bewegung für alle Clips dieser Szenen gemessen
 
 
 class SkipSegment(SQLModel, table=True):
@@ -61,12 +62,14 @@ class SkipSegment(SQLModel, table=True):
 
 
 class Clip(SQLModel, table=True):
-    """Eine Szene ohne OP/ED. Ab Phase 4 kommen hier Stimmung, Bewegung usw. dazu."""
+    """Eine Szene ohne OP/ED. Ab Phase 4 kommt hier die Stimmung dazu."""
 
     id: Optional[int] = Field(default=None, primary_key=True)
     episode_id: int = Field(foreign_key="episode.id", index=True)
     start: float
     end: float
+    motion: Optional[float] = None  # durchschnittliche Bewegung (Optical Flow)
+    motion_peak: Optional[float] = None  # Zeitpunkt der stärksten Bewegung (Sekunden in der Folge)
 
 
 class Character(SQLModel, table=True):
@@ -78,6 +81,21 @@ class Character(SQLModel, table=True):
     name: str
     role: str  # MAIN, SUPPORTING, BACKGROUND
     image_url: Optional[str] = None
+
+
+class Song(SQLModel, table=True):
+    """Ergebnis der Song-Analyse (Phase 3). Ein Song wird nur einmal analysiert."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    path: str = Field(index=True, unique=True)
+    file_size: int
+    file_mtime_ns: int
+    settings_signature: str  # Einstellungen, mit denen analysiert wurde
+    analyzer: str  # "allin1" oder "librosa"
+    duration: float
+    bpm: float
+    analysis: dict = Field(default_factory=dict, sa_column=Column(JSON))  # SongAnalysis als JSON
+    analyzed_at: datetime = Field(default_factory=_now)
 
 
 class ApiCache(SQLModel, table=True):

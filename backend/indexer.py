@@ -19,8 +19,9 @@ from sqlmodel import Session, select
 
 from backend.analysis.audio.op_ed_detect import Fingerprint, find_shared_segment, fingerprint, reconcile
 from backend.analysis.intervals import subtract
+from backend.analysis.video.motion import clip_motion, measure_motion
 from backend.analysis.video.scenes import detect_scenes
-from backend.config.settings import ApiSettings, Settings
+from backend.config.settings import ApiSettings, MotionSettings, Settings
 from backend.db.models import Character, Clip, Episode, Season, SkipSegment
 from backend.media import probe_duration, read_audio
 from backend.sources import anilist, aniskip, jikan
@@ -69,12 +70,14 @@ class IndexReport:
     skips_computed: int = 0
     skips_by_source: dict[str, int] = field(default_factory=dict)
     scenes_computed: int = 0
+    motion_computed: int = 0
     api_requests: int = 0
 
     @property
     def computed_anything(self) -> bool:
         return bool(
-            self.downloads or self.metadata_fetched or self.skips_computed or self.scenes_computed or self.api_requests
+            self.downloads or self.metadata_fetched or self.skips_computed or self.scenes_computed
+            or self.motion_computed or self.api_requests
         )
 
 
@@ -105,6 +108,11 @@ def _scenes_signature(path: Path, settings: Settings, skips: list[SkipSegment]) 
         *sorted(f"{s.kind}:{s.start:.2f}-{s.end:.2f}" for s in skips),
     ]
     return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _motion_signature(scenes_signature: str, cfg: MotionSettings) -> str:
+    raw = f"{scenes_signature}|{cfg.fps}|{cfg.width}x{cfg.height}|{cfg.edge_seconds}|{cfg.peak_smooth}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _upsert_season(session: Session, src: SourceSeason, anilist_override: int | None) -> Season:
@@ -202,7 +210,7 @@ def _prepare_episode(
         ep.filler, ep.recap = info.filler, info.recap
     ep.source_item_id = src.source_item_id or ep.source_item_id
 
-    complete = ep.skips_source is not None and ep.scenes_signature is not None
+    complete = ep.skips_source is not None and ep.scenes_signature is not None and ep.motion_signature is not None
     path = src.local_path
     if path is None and complete and not force:
         # Fertig analysiert und Datei nicht lokal: nichts herunterladen.
@@ -344,6 +352,28 @@ def _scene_pass(session: Session, settings: Settings, work: list[_Work], force: 
         log.info("Folge %d: %d Szenen, %d Clips nach OP/ED-Filter", w.number, len(raw), len(pieces))
 
 
+def _motion_pass(session: Session, settings: Settings, work: list[_Work], force: bool, report: IndexReport) -> None:
+    """Phase 3: Bewegung pro Clip (Durchschnitt + stärkster Moment). Die Kurve pro Folge wird gecacht."""
+    cfg = settings.motion
+    for w in work:
+        ep = session.get(Episode, w.episode_id)
+        assert ep is not None
+        signature = _motion_signature(ep.scenes_signature or "", cfg)
+        if ep.motion_signature == signature and not force:
+            continue
+        log.info("Folge %d: Bewegung ...", w.number)
+        curve = measure_motion(w.path, cfg, w.duration, use_cache=not force)
+        clips = session.exec(select(Clip).where(Clip.episode_id == w.episode_id)).all()
+        for clip in clips:
+            stats = clip_motion(curve, clip.start, clip.end, cfg.edge_seconds, cfg.peak_smooth)
+            clip.motion, clip.motion_peak = (stats.motion, stats.peak) if stats else (None, None)
+            session.add(clip)
+        ep.motion_signature = signature
+        session.add(ep)
+        session.commit()
+        report.motion_computed += 1
+
+
 def index_season(
     src: SourceSeason,
     settings: Settings,
@@ -379,6 +409,7 @@ def index_season(
             _write_skips(session, settings, work, report)
 
         _scene_pass(session, settings, work, force, report)
+        _motion_pass(session, settings, work, force, report)
 
         season.indexed_at = datetime.now(timezone.utc)
         session.add(season)

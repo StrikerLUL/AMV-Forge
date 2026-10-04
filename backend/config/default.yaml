@@ -1,7 +1,8 @@
 # Einstellungen für AMV-Forge. Alles, was man tunen will, steht hier statt im Code.
 
 quick:
-  # Alle wie viele Beats geschnitten wird (1 = jeder Beat, 2 = jeder zweite, 4 = jeder Takt bei 4/4).
+  # Nur mit --uniform: alle wie viele Beats geschnitten wird (1 = jeder Beat, 4 = jeder Takt bei 4/4).
+  # Ohne --uniform richtet sich die Schnittrate nach den Song-Abschnitten (siehe "cuts").
   beats_per_cut: 2
   # Kürzere Slots am Ende werden mit dem vorherigen zusammengelegt.
   min_slot_seconds: 0.25
@@ -70,3 +71,73 @@ op_ed:
   # Finden AniSkip und Audio-Vergleich beide ein OP/ED, müssen sie sich so stark überlappen (0-1).
   # Sonst gewinnt der Audio-Vergleich, weil er auf deiner Datei gemessen ist.
   min_overlap: 0.5
+
+# ---------------------------------------------------------------- Phase 3: Song-Struktur
+
+music:
+  # auto = allin1, wenn installiert, sonst librosa. allin1 oder librosa erzwingt den Analysator.
+  analyzer: auto
+  sample_rate: 22050
+  beats_per_bar: 4
+  # Hier legt allin1 seine Zwischendateien ab (werden danach gelöscht).
+  allin1_work_dir: data/cache/allin1
+  # Energiekurve: so viele Werte pro Sekunde, Mischung der drei Signale, Glättung.
+  energy_rate: 10
+  energy_weights:
+    loudness: 0.5
+    onset: 0.25
+    bass: 0.25
+  energy_smooth_seconds: 1.0
+  # librosa-Fallback für Abschnitte
+  min_section_bars: 4       # kürzer ist kein eigener Abschnitt
+  novelty_bars: 4           # so viele Takte vor/nach einer Grenze werden verglichen
+  novelty_threshold: 0.5    # 0-1, höher = weniger Abschnitte
+  chorus_energy: 0.7        # ab dieser Energie (0-1) ist ein Abschnitt ein Refrain
+  calm_energy: 0.35         # darunter ist ein Abschnitt ruhig (Intro, Outro, Bridge)
+  # Drops: Energie der 2 Takte danach minus die 2 Takte davor
+  drop_window_bars: 2
+  drop_min_jump: 0.2        # so stark muss die Energie springen (0-1)
+  drop_min_level: 0.75      # so laut muss es danach sein (0-1)
+  drop_min_distance_bars: 8
+  max_drops: 4
+
+cuts:
+  # Alle wie viele Beats pro Abschnitt geschnitten wird. 0.5 = zwei Schnitte pro Beat.
+  beats_per_cut:
+    intro: 4
+    verse: 2
+    chorus: 1
+    bridge: 2
+    outro: 4
+  # Ab jedem Drop wird so viele Takte lang im Drop-Tempo geschnitten, danach wie im Abschnitt.
+  drop: 0.5
+  drop_bars: 4
+  # Vor jedem Drop: Build-up, in dem die Schnitte Takt für Takt dichter werden (von -> bis).
+  buildup_bars: 4
+  buildup_from: 4
+  buildup_to: 1
+  # Kürzer wird kein Clip, auch nicht im Drop (bei sehr schnellen Songs wird dann pro Beat geschnitten).
+  min_cut_seconds: 0.18
+  # Ohne --song-start wird der Ausschnitt so gelegt, dass der stärkste Drop bei 40 % des Edits kommt.
+  drop_position: 0.4
+
+motion:
+  # Bewegung wird auf einer Mini-Version der Folge gemessen (schnell, reicht für die Stärke).
+  fps: 12
+  width: 160
+  height: 90
+  # So nah am Szenenwechsel wird die Bewegung ignoriert (der Schnitt selbst sieht aus wie Bewegung).
+  edge_seconds: 0.2
+  # Glättung für den Peak, in Messpunkten (3 = 0,25 s bei 12 fps)
+  peak_smooth: 3
+  cache_dir: data/cache/motion
+  # Optional: Hardware-Dekodierung für ffmpeg, z. B. "auto" oder "cuda". Leer = aus.
+  hwaccel: ""
+
+planner:
+  # Bewegung des Clips passend zur Energie des Songs wählen (Drop = viel Bewegung, Intro = ruhig).
+  match_intensity: true
+  # Aus den so vielen am besten passenden Clips wird zufällig einer gewählt (Abwechslung).
+  pick_from_top: 8
+  # Nicht öfter hintereinander Clips aus derselben Folge.
+  max_same_episode_in_row: 2

@@ -55,13 +55,18 @@ def _run(cmd: list[str]) -> None:
 
 def render_edit(
     assignments: list[Assignment],
-    video: Path,
     song: Path,
     song_start: float,
     out: Path,
     opts: RenderOptions,
+    video: Path | None = None,
 ) -> Path:
-    """Schneidet jeden Slot als eigenes Stück (frame-genau) und hängt alles mit der Musik zusammen."""
+    """Schneidet jeden Slot als eigenes Stück (frame-genau) und hängt alles mit der Musik zusammen.
+
+    Jede Zuweisung bringt ihre Folge mit (assignment.video), video ist nur der Standard dafür.
+    """
+    if any(a.video is None for a in assignments) and video is None:
+        raise ValueError("Zuweisung ohne Video: render_edit braucht video=... oder assignment.video.")
     out.parent.mkdir(parents=True, exist_ok=True)
     counts = frame_counts(assignments, opts.fps)
     total_seconds = sum(counts) / opts.fps
@@ -73,9 +78,11 @@ def render_edit(
             if frames <= 0:
                 continue
             seg = tmp_dir / f"seg_{i:04d}.mp4"
+            source = a.video or video
+            assert source is not None
             _run([
                 "ffmpeg", "-y", "-v", "error",
-                "-ss", f"{a.source_start:.3f}", "-i", str(video),
+                "-ss", f"{a.source_start:.3f}", "-i", str(source),
                 "-an", "-vf", _video_filter(opts),
                 "-frames:v", str(frames),
                 "-c:v", "libx264", "-preset", opts.preset, "-crf", str(opts.crf),
@@ -83,7 +90,8 @@ def render_edit(
                 str(seg),
             ])
             segment_files.append(seg)
-            log.info("Clip %d/%d: Video %.2f s, %d Frames", i + 1, len(assignments), a.source_start, frames)
+            log.info("Clip %d/%d: %s ab %.2f s, %d Frames%s", i + 1, len(assignments), source.name,
+                     a.source_start, frames, f" [{a.slot.section}]" if a.slot.section else "")
 
         concat_list = tmp_dir / "concat.txt"
         concat_list.write_text(
