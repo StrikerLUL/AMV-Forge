@@ -10,6 +10,8 @@ from pathlib import Path
 
 from scenedetect import AdaptiveDetector, detect
 
+from backend.media import probe_duration
+
 log = logging.getLogger(__name__)
 
 
@@ -33,15 +35,20 @@ def _cache_key(video: Path, threshold: float, min_len: int) -> str:
 
 def detect_scenes(
     video: Path,
-    cache_dir: Path,
+    cache_dir: Path | None,
     adaptive_threshold: float = 3.0,
     min_scene_len_frames: int = 12,
 ) -> list[Scene]:
-    """Findet alle Schnitte im Video. Ein zweiter Aufruf mit derselben Datei liest nur den Cache."""
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = cache_dir / f"{video.stem}_{_cache_key(video, adaptive_threshold, min_scene_len_frames)}.json"
+    """Findet alle Schnitte im Video. Ein zweiter Aufruf mit derselben Datei liest nur den Cache.
 
-    if cache_file.exists():
+    cache_dir=None schaltet den Cache ab (z. B. bei --force).
+    """
+    cache_file: Path | None = None
+    if cache_dir is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / f"{video.stem}_{_cache_key(video, adaptive_threshold, min_scene_len_frames)}.json"
+
+    if cache_file is not None and cache_file.exists():
         scenes = [Scene(**s) for s in json.loads(cache_file.read_text(encoding="utf-8"))]
         log.info("Szenen aus Cache geladen: %d (%s)", len(scenes), cache_file.name)
         return scenes
@@ -53,7 +60,11 @@ def detect_scenes(
     )
     scene_list = detect(str(video), detector, show_progress=True)
     scenes = [Scene(start=s.get_seconds(), end=e.get_seconds()) for s, e in scene_list]
+    if not scenes:
+        # Kein einziger Schnitt gefunden: das ganze Video ist eine Szene.
+        scenes = [Scene(start=0.0, end=probe_duration(video))]
 
-    cache_file.write_text(json.dumps([asdict(s) for s in scenes]), encoding="utf-8")
-    log.info("%d Szenen gefunden, Cache: %s", len(scenes), cache_file)
+    if cache_file is not None:
+        cache_file.write_text(json.dumps([asdict(s) for s in scenes]), encoding="utf-8")
+    log.info("%d Szenen gefunden in %s", len(scenes), video.name)
     return scenes

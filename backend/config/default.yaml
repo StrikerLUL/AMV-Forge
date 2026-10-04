@@ -24,3 +24,37 @@ render:
   crf: 20
   preset: veryfast
   audio_bitrate: 192k
+
+# ---------------------------------------------------------------- Phase 2: Staffel-Index
+
+database:
+  # SQLite-Datei mit Staffeln, Folgen, Clips, Charakteren und dem API-Cache.
+  path: data/amv_forge.sqlite
+
+index:
+  # Standardquelle, wenn --source fehlt: jellyfin oder folder.
+  source: folder
+  # Dateiendungen, die im Ordner-Modus als Folge zählen.
+  video_extensions: [".mkv", ".mp4", ".m4v", ".avi", ".webm"]
+  # Hierhin werden Folgen aus Jellyfin heruntergeladen (einmalig).
+  download_dir: data/cache/episodes
+  # Kürzere Clip-Reste nach dem OP/ED-Abschneiden werden verworfen.
+  min_clip_seconds: 0.5
+
+apis:
+  # Mindestabstand zwischen zwei Anfragen pro Dienst (Sekunden), damit wir kein Rate-Limit reißen.
+  anilist_interval: 2.1
+  jikan_interval: 1.1
+  aniskip_interval: 0.5
+  timeout_seconds: 30
+  max_retries: 4
+
+op_ed:
+  # Fallback, wenn AniSkip nichts weiß: gleiche Musik in zwei Folgen suchen.
+  head_seconds: 420        # OP wird in den ersten 7 Minuten gesucht (wegen Cold Open)
+  tail_seconds: 240        # ED in den letzten 4 Minuten
+  min_seconds: 40          # kürzer ist kein OP/ED
+  max_seconds: 130         # länger auch nicht
+  similarity: 0.90         # ab wann zwei Momente als "gleiche Musik" gelten (0-1)
+  max_gap_seconds: 2.0     # kurze Aussetzer im Treffer werden überbrückt
+  silence_db: -45          # leisere Stellen zählen nicht (Stille ist in jeder Folge gleich)

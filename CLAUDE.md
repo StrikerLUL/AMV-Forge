@@ -163,7 +163,7 @@ Start mit Greedy (Slot für Slot). Später optional globale Zuordnung (ungarisch
 
 ## Stand
 
-- Phase: 1 (Prototyp) fertig, als Nächstes Phase 2 (Staffel-Index + APIs)
-- Letzte Änderung: 2026-10-04, Phase 1 umgesetzt: `python -m backend.cli quick` mit librosa-Beats, PySceneDetect (AdaptiveDetector, JSON-Cache in `data/cache/scenes/`), zufälliger Clip-Zuweisung (Clip bleibt innerhalb einer Szene, keine Wiederholung) und frame-genauem ffmpeg-Render (30 fps, 1080×1920 Mitte-Crop, `--preview` 480×854, `--no-music`). Einstellungen in `backend/config/default.yaml`, Tests in `tests/` (Slots, Zuweisung, Frame-Raster).
-- Abweichung von der Struktur: Phase-1-Beats liegen in `backend/analysis/music/beats.py` (allin1 kommt in Phase 3 nach `structure.py`), Einstellungen in `backend/config/`.
-- Offene Fragen: Noch nicht mit einer echten Folge auf Strikers Windows-PC getestet.
+- Phase: 2 (Staffel-Index + APIs) fertig, als Nächstes Phase 3 (Song-Struktur)
+- Letzte Änderung: 2026-10-04, Phase 2 umgesetzt: `python -m backend.cli index` (Quelle `folder` oder `jellyfin`), `status` und `jellyfin-search`. SQLite über SQLModel in `data/amv_forge.sqlite` mit Tabellen season, episode, skipsegment, clip, character, apicache. AniList (Suche + SEQUEL-Kette für Staffel 2+, Genres, Tags, Charaktere mit Bild-URL), Jikan (Titel, Filler, Recap), AniSkip (OP/ED/Recap, bei mehreren Einträgen der mit der passendsten Folgenlänge). OP/ED-Fallback: zentriertes Chroma-CENS der ersten 7 / letzten 4 Minuten, längste gemeinsame Diagonale mit Nachbarfolgen (40–130 s). Jede Folge merkt sich `skips_source` und `scenes_signature`, ein zweiter Lauf rechnet nichts neu. 42 Tests (inkl. Index-Lauf mit gefälschten APIs).
+- Abweichungen von der Struktur: Beats in `backend/analysis/music/beats.py`, Einstellungen in `backend/config/`, ffmpeg-Helfer in `backend/media.py`, Index-Ablauf in `backend/indexer.py`, CLI-Befehle für Staffeln in `backend/commands/season.py`.
+- Offene Fragen: Mit echter Staffel und echtem Jellyfin noch nicht getestet. Strikers PC hat Python 3.10.11 (CLAUDE.md sagt 3.11), der Code läuft auf beiden.
