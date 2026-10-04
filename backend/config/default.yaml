@@ -1,0 +1,26 @@
+# Einstellungen für AMV-Forge. Alles, was man tunen will, steht hier statt im Code.
+
+quick:
+  # Alle wie viele Beats geschnitten wird (1 = jeder Beat, 2 = jeder zweite, 4 = jeder Takt bei 4/4).
+  beats_per_cut: 2
+  # Kürzere Slots am Ende werden mit dem vorherigen zusammengelegt.
+  min_slot_seconds: 0.25
+  # Grober OP/ED-Schutz bis Phase 2: so viele Sekunden am Anfang/Ende der Folge ignorieren.
+  skip_start_seconds: 0
+  skip_end_seconds: 0
+
+scenes:
+  # AdaptiveDetector: höher = weniger, längere Szenen.
+  adaptive_threshold: 3.0
+  # Kürzeste erlaubte Szene in Frames.
+  min_scene_len_frames: 12
+
+render:
+  width: 1080
+  height: 1920
+  preview_width: 480
+  preview_height: 854
+  fps: 30
+  crf: 20
+  preset: veryfast
+  audio_bitrate: 192k

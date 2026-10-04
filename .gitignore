@@ -1,0 +1,24 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Daten, Cache, Renders
+data/
+*.mp4
+*.mkv
+*.mp3
+*.wav
+*.flac
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,10 @@
+# Phase 1: Prototyp
+scenedetect[opencv-headless]>=0.6.4
+librosa>=0.10.2
+soundfile>=0.12.1
+numpy>=1.26
+PyYAML>=6.0
+python-dotenv>=1.0
+
+# Tests
+pytest>=8.0
