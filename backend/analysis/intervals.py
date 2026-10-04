@@ -40,3 +40,10 @@ def subtract(
             pieces = next_pieces
         result.extend(p for p in pieces if p[1] - p[0] >= min_length)
     return result
+
+
+def overlap_ratio(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Überlappung zweier Bereiche (Intersection over Union): 1 = identisch, 0 = gar nicht."""
+    inter = max(0.0, min(a[1], b[1]) - max(a[0], b[0]))
+    union = max(a[1], b[1]) - min(a[0], b[0])
+    return inter / union if union > 0 else 0.0

@@ -5,7 +5,7 @@ import pytest
 
 from backend.db import get_engine
 from backend.sources import anilist, aniskip, jikan
-from backend.sources.http import ApiClient
+from backend.sources.http import ApiClient, ApiError
 from backend.sources.jellyfin import JellyfinClient
 from tests.fake_apis import MAL_ID, S1_ID, S2_ID, FakeApis
 
@@ -23,6 +23,19 @@ def test_aniskip_picks_closest_episode_length(tmp_path: Path, fake: FakeApis) ->
     client = _client(tmp_path, fake, "aniskip", "https://api.aniskip.com")
     result = aniskip.skip_times(client, MAL_ID, 1, episode_duration=20.5)
     assert [(s.kind, s.start, s.end) for s in result] == [("op", 2.0, 8.0), ("ed", 15.0, 19.0)]
+
+
+def test_aniskip_sends_real_episode_length(tmp_path: Path, fake: FakeApis) -> None:
+    client = _client(tmp_path, fake, "aniskip", "https://api.aniskip.com")
+    aniskip.skip_times(client, MAL_ID, 1, episode_duration=1427.6)
+    assert "episodeLength=1428" in fake.urls[-1]
+
+
+def test_aniskip_drops_times_from_much_longer_files(tmp_path: Path, fake: FakeApis) -> None:
+    client = _client(tmp_path, fake, "aniskip", "https://api.aniskip.com")
+    # Unsere Datei hat 300 s, AniSkip kennt nur Einträge aus 20-s-Dateien und einen aus einer 300-s-Datei
+    result = aniskip.skip_times(client, MAL_ID, 1, episode_duration=300.0)
+    assert [(s.kind, s.start) for s in result] == [("op", 1.0)]
 
 
 def test_aniskip_unknown_episode_is_empty_and_cached(tmp_path: Path, fake: FakeApis) -> None:
@@ -49,6 +62,35 @@ def test_anilist_follows_sequel_for_season_two(tmp_path: Path, fake: FakeApis) -
     assert s1 is not None and s1.anilist_id == S1_ID and s1.mal_id == MAL_ID
     assert s2 is not None and s2.anilist_id == S2_ID
     assert [c.name for c in s1.characters] == ["Kyouko Hori", "Izumi Miyamura"]
+
+
+def test_anilist_rejects_unsure_match(tmp_path: Path, fake: FakeApis) -> None:
+    client = _client(tmp_path, fake, "anilist", "https://graphql.anilist.co")
+    assert anilist.find_anime(client, "S1") is None
+
+
+def test_title_score() -> None:
+    assert anilist.title_score("Horimiya", ["Horimiya"]) == 1.0
+    assert anilist.title_score("Kaguya-sama", ["Kaguya-sama: Love is War"]) >= 0.75
+    assert anilist.title_score("S1", ["Major S1"]) < 0.75
+
+
+def test_unreachable_service_is_skipped_for_the_rest_of_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("backend.sources.http.time.sleep", lambda _s: None)
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("timed out", request=request)
+
+    client = ApiClient(get_engine(tmp_path / "db.sqlite"), "jikan", "https://api.jikan.moe/v4", 0.0,
+                       transport=httpx.MockTransport(refuse), connection_retries=1)
+    with pytest.raises(ApiError):
+        client.get_json("/a")
+    assert client.network_requests == 2  # ein Versuch + eine Wiederholung
+    with pytest.raises(ApiError):
+        client.get_json("/b")
+    assert client.network_requests == 2  # nicht noch mal probiert
 
 
 def test_retry_on_rate_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

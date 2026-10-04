@@ -37,17 +37,22 @@ class ApiClient:
         timeout: float = 30.0,
         max_retries: int = 4,
         transport: httpx.BaseTransport | None = None,
+        connect_timeout: float = 5.0,
+        connection_retries: int = 1,
     ) -> None:
         self.engine = engine
         self.service = service
         self.min_interval = min_interval
         self.max_retries = max_retries
+        self.connection_retries = connection_retries
         self.network_requests = 0
         self.cache_hits = 0
+        # Nach einem endgültigen Verbindungsfehler wird der Dienst für den Rest des Laufs übersprungen.
+        self.unreachable = False
         self._last_request = 0.0
         self._http = httpx.Client(
             base_url=base_url,
-            timeout=timeout,
+            timeout=httpx.Timeout(timeout, connect=connect_timeout),
             transport=transport,
             headers={"User-Agent": "AMV-Forge/0.2 (github.com/StrikerLUL/amv-forge)"},
         )
@@ -78,6 +83,8 @@ class ApiClient:
                 self.cache_hits += 1
                 return cached.status_code, json.loads(cached.body) if cached.body else None
 
+        if self.unreachable:
+            raise ApiError(f"{self.service}: übersprungen, war vorhin nicht erreichbar")
         response = self._send_with_retries(method, path, params, payload)
         body: Any = None
         if response.content:
@@ -113,13 +120,16 @@ class ApiClient:
         payload: dict[str, Any] | None,
     ) -> httpx.Response:
         delay = 2.0
+        connection_failures = 0
         for attempt in range(self.max_retries + 1):
             self._wait_for_slot()
             self.network_requests += 1
             try:
                 response = self._http.request(method, path, params=params, json=payload)
             except httpx.TransportError as exc:
-                if attempt == self.max_retries:
+                connection_failures += 1
+                if connection_failures > self.connection_retries:
+                    self.unreachable = True
                     raise ApiError(f"{self.service}: keine Verbindung ({exc})") from exc
                 log.warning("%s: Verbindungsfehler, neuer Versuch in %.0f s", self.service, delay)
                 time.sleep(delay)

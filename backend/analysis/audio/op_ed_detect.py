@@ -14,6 +14,8 @@ from dataclasses import dataclass
 import librosa
 import numpy as np
 
+from backend.analysis.intervals import overlap_ratio
+
 log = logging.getLogger(__name__)
 
 FEATURE_SR = 22050
@@ -115,3 +117,25 @@ def find_shared_segment(
         end_b=b.offset + (ib + length) / fps,
         coverage=hits / length,
     )
+
+
+def reconcile(
+    aniskip: tuple[float, float] | None,
+    audio: tuple[float, float] | None,
+    min_overlap: float,
+) -> tuple[tuple[float, float], str] | None:
+    """Entscheidet zwischen AniSkip und Audio-Vergleich für ein OP oder ED.
+
+    - nur einer hat etwas gefunden: den nehmen
+    - beide überlappen genug: beide zusammen (lieber 2 s zu viel raus als ein Stück Opening drin)
+    - beide widersprechen sich: Audio-Vergleich, denn der ist auf deiner Datei gemessen
+    """
+    if aniskip is None and audio is None:
+        return None
+    if audio is None:
+        return aniskip, "aniskip"  # type: ignore[return-value]
+    if aniskip is None:
+        return audio, "fingerprint"
+    if overlap_ratio(aniskip, audio) >= min_overlap:
+        return (min(aniskip[0], audio[0]), max(aniskip[1], audio[1])), "aniskip+fingerprint"
+    return audio, "fingerprint"
