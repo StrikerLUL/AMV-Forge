@@ -1,7 +1,8 @@
 """Jedem Slot einen Clip zuweisen.
 
 Phase 1: zufällig (assign_random). Phase 3: Bewegung passend zur Song-Energie, und der stärkste
-Bewegungsmoment des Clips landet genau auf einem Beat (assign_to_beats).
+Bewegungsmoment des Clips landet genau auf einem Beat (assign_to_beats). Phase 4: Auswahl nach der
+Score-Formel (scoring.py) mit Stimmung, Qualität, Wiederholung und Dialog.
 """
 
 from __future__ import annotations
@@ -12,25 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from backend.analysis.video.scenes import Scene
+from backend.config.settings import ScoreWeights
+from backend.planner.scoring import ENERGY_ONLY, score_clip, style_pool
 from backend.planner.slots import Slot
 
 log = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class Assignment:
-    """Ein Slot im Edit und die Stelle im Video, die dort läuft."""
-
-    slot: Slot
-    source_start: float
-    video: Path | None = None
-    episode: int | None = None
-    # True, wenn der Bewegungs-Peak des Clips genau auf einem Beat liegt
-    aligned: bool = False
-
-    @property
-    def source_end(self) -> float:
-        return self.source_start + self.slot.duration
 
 
 @dataclass(frozen=True)
@@ -43,10 +30,33 @@ class Candidate:
     motion: float | None = None
     peak: float | None = None  # Sekunden in der Folge
     episode: int | None = None
+    # Ab Phase 4
+    clip_id: int | None = None
+    mood: dict[str, float] | None = None
+    quality: float | None = None
+    speech: float | None = None
 
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+
+@dataclass(frozen=True)
+class Assignment:
+    """Ein Slot im Edit und die Stelle im Video, die dort läuft."""
+
+    slot: Slot
+    source_start: float
+    video: Path | None = None
+    episode: int | None = None
+    # True, wenn der Bewegungs-Peak des Clips genau auf einem Beat liegt
+    aligned: bool = False
+    candidate: Candidate | None = None
+    score: float | None = None
+
+    @property
+    def source_end(self) -> float:
+        return self.source_start + self.slot.duration
 
 
 def usable_scenes(
@@ -139,15 +149,23 @@ def assign_to_beats(
     slots: list[Slot],
     candidates: list[Candidate],
     rng: random.Random,
-    match_intensity: bool = True,
+    weights: ScoreWeights = ENERGY_ONLY,
     pick_from_top: int = 8,
     max_same_episode_in_row: int = 2,
+    target: dict[str, float] | None = None,
+    pool_share: float = 1.0,
+    repeat_window: int = 6,
 ) -> list[Assignment]:
-    """Greedy, Slot für Slot: passend lange Clips, möglichst mit Peak auf dem Beat, Bewegung passend
-    zur Energie des Slots, kein Clip doppelt und nicht zu oft dieselbe Folge hintereinander."""
+    """Greedy, Slot für Slot: passend lange Clips, möglichst mit Peak auf dem Beat, nach Score sortiert.
+
+    Mit target (Ziel-Stimmung eines Stils) kommen nur die pool_share besten Clips nach Stimmung in
+    Frage. Aus den pick_from_top besten nach Score wird zufällig gewählt, damit nicht jedes Edit gleich
+    aussieht. Kein Clip doppelt und nicht zu oft dieselbe Folge hintereinander.
+    """
     if not candidates:
         raise ValueError("Keine Clips zur Auswahl.")
     ranks = _motion_ranks(candidates)
+    in_style = style_pool(candidates, target, pool_share) if target else None
     used: set[int] = set()
     result: list[Assignment] = []
 
@@ -163,6 +181,9 @@ def assign_to_beats(
             log.warning("Kein Clip ist %.2f s lang, nehme den längsten.", slot.duration)
             pool = [longest]
 
+        if in_style is not None:
+            pool = [i for i in pool if i in in_style] or pool
+
         recent = [a.episode for a in result[-max_same_episode_in_row:]] if max_same_episode_in_row > 0 else []
         if len(recent) == max_same_episode_in_row and recent and len(set(recent)) == 1 and recent[0] is not None:
             other = [i for i in pool if candidates[i].episode != recent[0]]
@@ -170,11 +191,13 @@ def assign_to_beats(
 
         alignable = [i for i in pool if _can_align(candidates[i], slot)]
         pool = alignable or pool
-        if match_intensity:
-            pool = sorted(pool, key=lambda i: (abs(ranks[i] - slot.intensity), i))[: max(1, pick_from_top)]
-        idx = rng.choice(pool)
+        window = [a.episode for a in result[-repeat_window:]] if repeat_window > 0 else []
+        scores = {i: score_clip(candidates[i], ranks[i], slot.intensity, weights, target, window).total for i in pool}
+        best = sorted(pool, key=lambda i: (-scores[i], i))[: max(1, pick_from_top)]
+        idx = rng.choice(best)
         used.add(idx)
         cand = candidates[idx]
         start, aligned = align_start(cand, slot)
-        result.append(Assignment(slot=slot, source_start=start, video=cand.video, episode=cand.episode, aligned=aligned))
+        result.append(Assignment(slot=slot, source_start=start, video=cand.video, episode=cand.episode,
+                                 aligned=aligned, candidate=cand, score=scores[idx]))
     return result

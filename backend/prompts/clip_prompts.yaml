@@ -1,0 +1,68 @@
+# Sätze für die CLIP-Bilderkennung (Phase 4).
+#
+# CLIP vergleicht jedes Standbild mit allen Sätzen auf einmal und verteilt 100 % Wahrscheinlichkeit
+# auf sie. Pro Gruppe werden die Wahrscheinlichkeiten ihrer Sätze addiert. Die Sätze sind Englisch,
+# weil CLIP mit englischen Bildunterschriften trainiert wurde.
+#
+# Nach dem Ändern reicht ein neuer 'index'-Lauf: Die Bilder sind schon als Embeddings gespeichert,
+# es wird nur neu verglichen (dauert Sekunden, nicht Minuten).
+
+moods:
+  romance:
+    - "an anime boy and girl looking into each other's eyes"
+    - "a blushing anime girl"
+    - "a blushing anime boy"
+    - "an anime couple holding hands"
+    - "an anime couple hugging"
+    - "an anime couple about to kiss"
+    - "an anime boy and girl sitting close together"
+    - "an anime couple walking side by side"
+  action:
+    - "an anime fight scene with explosions"
+    - "anime characters fighting"
+    - "an anime character running fast"
+    - "an anime character shouting angrily"
+    - "a dynamic anime scene with speed lines"
+    - "an anime character punching someone"
+  sad:
+    - "an anime girl crying"
+    - "an anime character with tears in the eyes"
+    - "a lonely anime character in the rain"
+    - "a sad anime character looking down"
+    - "an anime character sitting alone in a dark room"
+  funny:
+    - "an anime character with an exaggerated funny face"
+    - "chibi anime characters"
+    - "an anime character laughing out loud"
+    - "a shocked anime character with a comical face"
+    - "an anime character making a silly face"
+  calm:
+    - "a peaceful anime landscape"
+    - "an anime sky with clouds"
+    - "an anime sunset"
+    - "a quiet anime street in the evening"
+    - "an anime classroom with sunlight through the window"
+    - "anime cherry blossoms"
+
+# Fangen alles auf, was nichts Besonderes ist. Ohne diese Gruppe würde jedes Bild irgendeiner
+# Stimmung zugeschlagen, auch zwei Leute, die einfach nur reden.
+neutral:
+  - "an anime character talking"
+  - "an anime character standing"
+  - "a close-up of an anime character's face"
+  - "anime characters in a room"
+  - "a group of anime students"
+  - "an anime character holding a phone"
+
+# Bilder, die nicht ins Edit sollen. Liegt eine Gruppe über quality.prompt_threshold
+# (default.yaml), fliegt der Clip raus. Der Gruppenname steht dann als Grund in 'moods'.
+quality:
+  text:
+    - "white text on a black screen"
+    - "anime ending credits"
+    - "an anime title card with large text"
+    - "an anime logo"
+    - "a screen full of japanese text"
+  blurry:
+    - "a very blurry image"
+    - "a motion blurred image"

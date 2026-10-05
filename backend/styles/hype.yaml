@@ -1,0 +1,21 @@
+# Stil "Hype": viel Bewegung, Kämpfe, Explosionen, Geschrei.
+# Phase 4 nutzt nur mood, pool und weights. BPM-Bereich, Schnittrate, Übergänge und Effekte
+# kommen in Phase 6 dazu.
+
+description: Action, hohe Bewegung, laute Szenen
+
+mood:
+  action: 1.0
+  funny: 0.1
+  sad: -0.3
+  romance: -0.4
+  calm: -0.7
+
+pool: 0.3
+
+weights:
+  mood: 1.0
+  energy: 0.6      # im Drop die wildesten Clips, im Intro die ruhigeren
+  quality: 0.3
+  repeat: 0.3
+  dialog: 0.2

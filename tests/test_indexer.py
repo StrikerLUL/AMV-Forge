@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,8 +12,10 @@ from backend.config import load_settings
 from backend.db import get_engine
 from backend.db.models import Character, Clip, Episode, Season
 from backend.indexer import index_season, make_apis
+from backend.mood_index import MoodModels
 from backend.sources.folder import scan_folder
 from tests.fake_apis import MAL_ID, S2_ID, FakeApis
+from tests.fake_models import FakeClip, FakeDialog, FakeVad
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg fehlt")
 
@@ -33,15 +36,20 @@ def test_index_twice_computes_nothing_the_second_time(tmp_path: Path, monkeypatc
     folder.mkdir()
     for n in (1, 2):
         _make_episode(folder / f"Horimiya - {n:02d}.mkv")
+    (folder / "Horimiya - 01.de.srt").write_text("1\n00:00:09,000 --> 00:00:10,500\nIch liebe dich.\n", encoding="utf-8")
 
     settings = load_settings()
     engine = get_engine(tmp_path / "test.sqlite")
     fake = FakeApis()
     source = scan_folder(folder, settings.index.video_extensions)
+    fake_clip = FakeClip(settings.clip)
+    models = MoodModels(settings, clip=fake_clip, vad=FakeVad([(8.5, 10.0)]), dialog=FakeDialog())
 
-    first = index_season(source, settings, engine, make_apis(engine, settings.apis, fake.transport))
+    first = index_season(source, settings, engine, make_apis(engine, settings.apis, fake.transport), models=models)
     assert first.scenes_computed == 2 and first.skips_computed == 2 and first.motion_computed == 2
     assert first.metadata_fetched and first.api_requests > 0
+    m = first.mood
+    assert (m.visual, m.tags, m.audio, m.subtitles, m.mood) == (2, 2, 2, 2, True)
 
     with Session(engine) as session:
         season = session.exec(select(Season)).one()
@@ -58,21 +66,42 @@ def test_index_twice_computes_nothing_the_second_time(tmp_path: Path, monkeypatc
         for clip in session.exec(select(Clip)):
             assert clip.motion is not None and clip.motion_peak is not None
             assert clip.start <= clip.motion_peak <= clip.end
+            # Phase 4: Vorschaubild, CLIP, Ton, Stimmung, Qualität
+            assert clip.thumbnail is not None and Path(clip.thumbnail).is_file()
+            assert clip.clip_tags is not None and clip.clip_top is not None
+            assert clip.loudness is not None and clip.speech is not None
+            assert clip.mood is not None and set(clip.mood) == {"romance", "action", "sad", "funny", "calm"}
+            assert clip.quality is not None and clip.quality_issue is None  # testsrc ist bunt und scharf
+        assert ep1.subtitle_source == "Horimiya - 01.de.srt" and ep2.subtitle_source == "keine"
+        scene = session.exec(select(Clip).where(Clip.episode_id == ep1.id, Clip.start == 8.0)).one()
+        assert scene.subtitle == "Ich liebe dich." and scene.dialog_tags and scene.dialog_tags["romance"] == 0.9
+        assert scene.speech == round(1.5 / 7, 3) and scene.dialog is True
 
     fake.calls.clear()
+    images = fake_clip.images_seen
     second = index_season(
         scan_folder(folder, settings.index.video_extensions), settings, engine,
-        make_apis(engine, settings.apis, fake.transport),
+        make_apis(engine, settings.apis, fake.transport), models=models,
     )
     assert not second.computed_anything
     assert fake.calls == []
     assert second.clips_total == first.clips_total
 
+    # Neue Prompts: nur der CLIP-Vergleich und die Stimmung, die Folgen werden nicht neu dekodiert
+    prompts = tmp_path / "prompts.yaml"
+    prompts.write_text(settings.clip.prompts.read_text(encoding="utf-8").replace(
+        '    - "an anime sunset"', '    - "an anime sunset"\n    - "an anime beach"'), encoding="utf-8")
+    tuned = replace(settings, clip=replace(settings.clip, prompts=prompts))
+    third = index_season(scan_folder(folder, settings.index.video_extensions), tuned, engine, None,
+                         models=MoodModels(tuned, clip=fake_clip, vad=FakeVad([(8.5, 10.0)]), dialog=FakeDialog()))
+    assert (third.mood.visual, third.mood.tags, third.mood.audio, third.mood.subtitles) == (0, 2, 0, 0)
+    assert third.mood.mood and fake_clip.images_seen == images
+
     # Falsches Anime korrigiert: neue AniList-ID -> neue MAL-ID -> OP/ED wird neu gesucht
-    third = index_season(
+    fourth = index_season(
         scan_folder(folder, settings.index.video_extensions), settings, engine,
-        make_apis(engine, settings.apis, fake.transport), anilist_override=S2_ID,
+        make_apis(engine, settings.apis, fake.transport), anilist_override=S2_ID, models=models,
     )
-    assert third.skips_computed == 2
+    assert fourth.skips_computed == 2
     with Session(engine) as session:
         assert session.exec(select(Season)).one().mal_id == 54856

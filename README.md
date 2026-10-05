@@ -3,11 +3,12 @@
 Aus einer Anime-Staffel und einem Song automatisch ein beat-synchrones 9:16-Edit für TikTok schneiden.
 Die komplette Projektbeschreibung und Roadmap steht in [CLAUDE.md](CLAUDE.md).
 
-## Stand: Phase 3 (Song-Struktur)
+## Stand: Phase 4 (Stimmungserkennung)
 
 - **Phase 1, `quick`:** Eine Folge + ein Song → 9:16-MP4, jeder Schnitt exakt auf dem Beat.
 - **Phase 2, `index`:** Eine ganze Staffel (aus einem Ordner oder aus Jellyfin) wird einmal analysiert und landet in `data/amv_forge.sqlite`: Folgen, Szenen ohne Opening/Ending/Recap, Metadaten und Charaktere von AniList, Filler-Markierung von Jikan. Ein zweiter Lauf berechnet nichts neu.
 - **Phase 3, `song` und `edit`:** Der Song wird in Abschnitte (Intro, Verse, Chorus …) zerlegt, Drops werden erkannt. Im Verse wird ruhig geschnitten, im Build-up immer dichter, im Drop zweimal pro Beat. Jeder Clip wird so gelegt, dass sein stärkster Bewegungsmoment genau auf einem Beat liegt, und wilde Clips landen im Drop, ruhige im Intro. `edit` nimmt die Clips aus der ganzen Staffel.
+- **Phase 4, Stimmung und `--style`:** `index` schaut sich jetzt jeden Clip an (CLIP), hört hin (Lautstärke, wird geredet?) und liest die Untertitel. Daraus wird pro Clip ein Stimmungsvektor (romance, action, sad, funny, calm). `edit --style romance` nimmt dann fast nur ruhige Paar-Szenen, `--style hype` fast nur Action. Schwarzbilder, Abspann, Logos und verwackelte Clips fliegen raus. `moods` zeigt, was erkannt wurde, mit Kontaktbögen zum Anschauen.
 
 ### So läuft `quick` (Phase 1)
 
@@ -38,6 +39,20 @@ Die komplette Projektbeschreibung und Roadmap steht in [CLAUDE.md](CLAUDE.md).
 6. **Bewegung** (`backend/analysis/video/motion.py`): Optical Flow vergleicht zwei aufeinanderfolgende Bilder und schätzt, wie weit sich jeder Pixel bewegt hat. Das läuft auf einer 160×90-Mini-Version mit 12 Bildern pro Sekunde. Pro Clip werden die durchschnittliche Bewegung und der stärkste Moment (Peak) gespeichert. Die Kurve pro Folge liegt in `data/cache/motion/`.
 7. **Clips verteilen** (`backend/planner/assign.py`): Jeder Slot hat eine Ziel-Intensität aus der Energiekurve. Ruhige Slots bekommen ruhige Clips, laute Slots wilde. Aus den 8 am besten passenden wird zufällig einer genommen, kein Clip doppelt, höchstens 2 Clips aus derselben Folge hintereinander. Dann wird der Clip so verschoben, dass sein Peak genau auf dem Schnitt liegt (oder auf einem anderen Beat im Slot, wenn er sonst nicht reinpasst).
 
+### So läuft die Stimmungserkennung (Phase 4)
+
+Alles passiert in `index`, pro Folge einmal (`backend/mood_index.py`):
+
+1. **Standbilder** (`backend/analysis/video/keyframes.py`): ffmpeg tastet die Folge mit 4 Bildern pro Sekunde in 224 Pixel Höhe ab. Von jedem Clip werden 1–3 Bilder behalten, mit Abstand zum Schnitt. Das mittlere landet als Vorschaubild in `data/cache/keyframes/`.
+2. **CLIP** (`backend/analysis/video/clip_tags.py`): CLIP rechnet Bilder und Sätze in denselben Zahlenraum um (ein *Embedding*, 512 Zahlen). Bild und passende Beschreibung liegen dort nah beieinander. Jedes Standbild wird mit den Sätzen aus `backend/prompts/clip_prompts.yaml` verglichen („an anime couple holding hands“, „anime characters fighting“ …). Weil CLIP nur Quadrate sieht, wird das 16:9-Bild in eine linke und rechte Hälfte geteilt, damit niemand am Rand abgeschnitten wird. Die Embeddings liegen in `data/cache/clip/`, neue Prompts brauchen deshalb kein neues Dekodieren.
+3. **Bildqualität** (`quality.py`): Helligkeit, Kontrast und Schärfe kommen direkt aus den Pixeln, Text/Abspann/Logo erkennt CLIP. Schwarzbilder, Weißblitze, einfarbige Flächen, Texttafeln und sehr unscharfe Clips kommen nie ins Edit.
+4. **Ton der Folge** (`backend/analysis/audio/episode_audio.py`): Lautstärke pro Clip in dB. **Silero VAD** (Voice Activity Detection) ist ein kleines neuronales Netz, das in 32-ms-Stücken entscheidet, ob eine Stimme zu hören ist. So weiß jeder Clip, wie viel darin geredet wird.
+5. **Untertitel** (`subtitles.py`): Datei neben der Folge (`Folge.de.ass`, `Folge.srt`) oder Spur in der MKV/MP4. Schilder, Liedtexte und Geräusch-Beschreibungen fliegen raus. Ein mehrsprachiges Satz-Modell vergleicht jede Zeile mit den Beispielen in `backend/prompts/dialog_prompts.yaml` (Geständnis, Streit, Witz, Trauer). „Ich liebe dich“ und „I love you“ landen dabei fast am selben Punkt.
+6. **Stimmungsvektor** (`backend/analysis/mood.py`): Jedes Signal wird innerhalb der Staffel in einen Rang 0–1 umgerechnet (0 = kleinster Wert der Staffel, 1 = größter). Pro Stimmung ergibt sich dann ein gewichteter Mittelwert: viel Bewegung und laut → action, leise ohne Sprache → romance/calm, dazu CLIP und Untertitel. Die Gewichte stehen unter `mood.weights` in `default.yaml`. Fehlt ein Signal (keine Untertitel), zählen nur die anderen.
+
+Danach wählt `edit` mit der **Score-Formel** (`backend/planner/scoring.py`) aus CLAUDE.md:
+`Score = Stimmung + Energie-Passung + Qualität − Wiederholung − Dialog`, jeweils mit Gewicht. Die Ziel-Stimmung und die Gewichte jedes Stils stehen in `backend/styles/<stil>.yaml` (romance, hype, sad, funny). Mit Stil kommen nur die 30 % der Clips in Frage, die am besten zur Ziel-Stimmung passen, daraus nimmt der Planer pro Slot einen der 8 besten.
+
 ## Installation (Windows)
 
 Voraussetzungen: Python 3.10 oder 3.11 und ffmpeg im PATH (`ffmpeg -version` muss funktionieren).
@@ -47,8 +62,11 @@ git clone https://github.com/StrikerLUL/amv-forge.git
 cd amv-forge
 py -3 -m venv .venv
 .venv\Scripts\activate
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
+
+Die `torch`-Zeile installiert PyTorch mit CUDA für NVIDIA-Grafikkarten (ab Phase 4 für CLIP, Silero und das Satz-Modell). Ohne sie holt `pip install -r requirements.txt` die CPU-Version, das geht auch, ist aber langsamer. Mehr dazu unten bei Phase 4.
 
 ## Benutzung: eine Folge (Phase 1)
 
@@ -133,14 +151,69 @@ Das Ergebnis landet in `data/renders/edit.mp4`, daneben `edit.plan.json` mit Abs
 
 Die Schnittraten pro Abschnitt, Build-up und Drop stehen unter `cuts:` in `backend/config/default.yaml`, die Drop-Erkennung unter `music:`, die Bewegungsmessung unter `motion:` und die Clip-Auswahl unter `planner:`.
 
+## Benutzung: Stimmung und Stile (Phase 4)
+
+### Pakete installieren (einmal)
+
+Phase 4 braucht PyTorch, CLIP (`open_clip_torch`), Silero VAD, `pysubs2` und `sentence-transformers`. PyTorch zuerst und **mit CUDA**, sonst rechnet alles auf der CPU (in der aktivierten venv):
+
+```bat
+pip uninstall -y torch torchvision
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
+
+Die letzte Zeile muss `True` ausgeben (z. B. `2.x.x+cu128 True`). Steht da `+cpu` oder `False`, ist die CPU-Version drin. Meldet pip „No matching distribution“, auf https://pytorch.org/get-started/locally/ Windows, Pip, Python und die oberste CUDA-Version wählen und die angezeigte Zeile nehmen.
+
+Beim ersten `index` lädt das Tool zwei Modelle aus dem Internet (einmalig, landen in `%USERPROFILE%\.cache\huggingface`): CLIP ViT-B-32 (ca. 600 MB) und das Satz-Modell für Untertitel (ca. 470 MB). Silero VAD steckt schon im pip-Paket. Fehlt ein Paket oder klappt ein Download nicht, läuft `index` ohne dieses Signal weiter und sagt das in der Ausgabe.
+
+### Staffel neu indizieren
+
+Nur die neuen Schritte werden gerechnet (Standbilder + CLIP, Ton, Untertitel), OP/ED, Szenen und Bewegung kommen aus der Datenbank:
+
+```bat
+python -m backend.cli index --source folder --path "P:\Anime\Horimiya\S1"
+```
+
+### Anschauen, was erkannt wurde
+
+```bat
+python -m backend.cli moods --season 1
+python -m backend.cli moods --season 1 --style romance
+```
+
+`moods` zeigt, welche Signale da sind, wie viele Clips wegen Bildqualität rausfliegen, die Top 5 pro Stimmung (mit dem CLIP-Satz, der am besten passt, und dem Untertitel) und schreibt Kontaktbögen nach `data/renders/stimmung_s1_<stimmung>.jpg`: die 24 passendsten Clips als Vorschaubilder.
+
+### Edit mit Stil
+
+```bat
+python -m backend.cli edit --season 1 --song "C:\Musik\song.mp3" --style romance --seed 7 --preview --out data\renders\romance.mp4
+python -m backend.cli edit --season 1 --song "C:\Musik\song.mp3" --style hype --seed 7 --preview --out data\renders\hype.mp4
+```
+
+Am Ende steht, welche Stimmung im Edit steckt („Stärkste Stimmung pro Clip: romance 40, calm 25 …“). In der `.plan.json` stehen pro Clip Stimmungsvektor, Qualität, Sprachanteil und Score. Ohne `--style` wählt `edit` wie in Phase 3 nur nach Bewegung, sortiert aber schlechte Bilder aus.
+
+### Nachjustieren ohne Code
+
+| Datei | Was du änderst | Was danach neu gerechnet wird |
+| --- | --- | --- |
+| `backend/prompts/clip_prompts.yaml` | Sätze für CLIP (z. B. mehr Romance-Motive) | Nur der Vergleich, Sekunden |
+| `backend/prompts/dialog_prompts.yaml` | Beispielsätze für Untertitel | Nur die Untertitel |
+| `default.yaml` → `mood.weights` | Wie stark CLIP, Bewegung, Ton, Untertitel zählen | Nur die Mischung, Sekunden |
+| `default.yaml` → `quality` | Ab wann ein Clip als schwarz/Text/unscharf gilt | Nur die Mischung |
+| `backend/styles/*.yaml` | Ziel-Stimmung, Pool-Größe, Gewichte der Score-Formel | Nichts, wirkt sofort beim nächsten `edit` |
+
+Nach Änderungen an den Prompts, Gewichten oder Qualitäts-Schwellen einmal `index` laufen lassen.
+Tipp OneDrive: Die Vorschaubilder sind etwa 15 KB pro Clip (bei einer Staffel einige Tausend Dateien). Wer das nicht in OneDrive haben will, setzt `keyframes.cache_dir` und `clip.cache_dir` in einer eigenen YAML auf einen Ordner außerhalb.
+
 ### Optional: allin1 (genauere Song-Analyse)
 
-allin1 braucht PyTorch, madmom und NATTEN. NATTEN muss unter Windows selbst kompiliert werden und scheitert dort oft. Ohne allin1 läuft alles mit dem librosa-Fallback, das Tool sagt dir in der Ausgabe, welcher Analysator benutzt wurde.
+allin1 braucht PyTorch (wie in Phase 4 installieren), madmom und NATTEN. NATTEN muss unter Windows selbst kompiliert werden und scheitert dort oft. Ohne allin1 läuft alles mit dem librosa-Fallback, das Tool sagt dir in der Ausgabe, welcher Analysator benutzt wurde.
 
 Versuch es so (in der aktivierten venv):
 
 ```powershell
-pip install torch
 pip install git+https://github.com/CPJKU/madmom
 pip install natten
 pip install allin1

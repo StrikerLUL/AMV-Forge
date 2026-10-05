@@ -24,6 +24,7 @@ from backend.analysis.video.scenes import detect_scenes
 from backend.config.settings import ApiSettings, MotionSettings, Settings
 from backend.db.models import Character, Clip, Episode, Season, SkipSegment
 from backend.media import probe_duration, read_audio
+from backend.mood_index import MoodModels, MoodReport, MoodWork, run_mood_passes
 from backend.sources import anilist, aniskip, jikan
 from backend.sources.base import SourceEpisode, SourceSeason
 from backend.sources.http import ApiClient, ApiError
@@ -71,13 +72,14 @@ class IndexReport:
     skips_by_source: dict[str, int] = field(default_factory=dict)
     scenes_computed: int = 0
     motion_computed: int = 0
+    mood: MoodReport = field(default_factory=MoodReport)
     api_requests: int = 0
 
     @property
     def computed_anything(self) -> bool:
         return bool(
             self.downloads or self.metadata_fetched or self.skips_computed or self.scenes_computed
-            or self.motion_computed or self.api_requests
+            or self.motion_computed or self.mood.computed_anything or self.api_requests
         )
 
 
@@ -210,7 +212,10 @@ def _prepare_episode(
         ep.filler, ep.recap = info.filler, info.recap
     ep.source_item_id = src.source_item_id or ep.source_item_id
 
-    complete = ep.skips_source is not None and ep.scenes_signature is not None and ep.motion_signature is not None
+    complete = all(sig is not None for sig in (
+        ep.skips_source, ep.scenes_signature, ep.motion_signature,
+        ep.visual_signature, ep.tags_signature, ep.audio_signature, ep.subtitle_signature,
+    ))
     path = src.local_path
     if path is None and complete and not force:
         # Fertig analysiert und Datei nicht lokal: nichts herunterladen.
@@ -381,6 +386,7 @@ def index_season(
     apis: Apis | None,
     force: bool = False,
     anilist_override: int | None = None,
+    models: MoodModels | None = None,
 ) -> IndexReport:
     report = IndexReport(title=src.title, episodes=len(src.episodes))
     requests_before = apis.network_requests if apis else 0
@@ -410,6 +416,9 @@ def index_season(
 
         _scene_pass(session, settings, work, force, report)
         _motion_pass(session, settings, work, force, report)
+        # Phase 4: Bild, Ton, Untertitel pro Folge, danach die Stimmung der ganzen Staffel
+        mood_work = [MoodWork(w.episode_id, w.number, w.path, w.duration) for w in work]
+        report.mood = run_mood_passes(session, settings, season, mood_work, models or MoodModels(settings), force)
 
         season.indexed_at = datetime.now(timezone.utc)
         session.add(season)
