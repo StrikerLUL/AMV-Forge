@@ -1,0 +1,58 @@
+# Beispielsätze für die Untertitel-Erkennung (Phase 4).
+#
+# Ein mehrsprachiges Satz-Modell rechnet jede Untertitelzeile in einen Bedeutungs-Vektor um und
+# vergleicht ihn mit diesen Beispielen. Die Sprache ist egal: "Ich liebe dich" und "I love you"
+# landen fast am selben Punkt. Pro Gruppe zählt das ähnlichste Beispiel.
+#
+# Eigene Sätze einfach dazuschreiben. Danach 'index' laufen lassen, nur die Zeilen werden neu bewertet.
+
+# Je kleiner, desto eindeutiger entscheidet sich eine Zeile für eine Gruppe (0.02-0.2 sind sinnvoll)
+temperature: 0.05
+
+groups:
+  romance:
+    - "Ich liebe dich."
+    - "Ich mag dich. Willst du mit mir gehen?"
+    - "Ich will für immer bei dir sein."
+    - "Du bist mir wichtig."
+    - "Darf ich deine Hand halten?"
+    - "I love you."
+    - "I like you. Will you go out with me?"
+    - "I want to be with you."
+  action:
+    - "Halt die Klappe!"
+    - "Lass mich in Ruhe!"
+    - "Ich mach dich fertig!"
+    - "Was fällt dir ein?!"
+    - "Verschwinde!"
+    - "Shut up!"
+    - "Leave me alone!"
+    - "I'll beat you up!"
+  sad:
+    - "Es tut mir so leid."
+    - "Bitte geh nicht."
+    - "Ich bin so allein."
+    - "Warum hast du mich verlassen?"
+    - "Ich vermisse dich."
+    - "I'm so sorry."
+    - "Please don't leave me."
+    - "I miss you."
+  funny:
+    - "Bist du ein Idiot?"
+    - "Was soll das denn?!"
+    - "Das ist so peinlich!"
+    - "Hahaha, wie lustig!"
+    - "Du siehst total bescheuert aus."
+    - "Are you an idiot?"
+    - "What the hell is that?!"
+    - "That's so embarrassing!"
+  # Alltag: fängt alles auf, was keine besondere Stimmung hat
+  neutral:
+    - "Bis morgen."
+    - "Hast du die Hausaufgaben gemacht?"
+    - "Wie spät ist es?"
+    - "Ich gehe jetzt nach Hause."
+    - "Was gibt es zum Abendessen?"
+    - "See you tomorrow."
+    - "Did you do the homework?"
+    - "I'm going home now."

@@ -1,0 +1,21 @@
+# Stil "Sad": Weinen, Abschied, Regen, Einsamkeit.
+# Phase 4 nutzt nur mood, pool und weights. BPM-Bereich, Schnittrate, Übergänge und Effekte
+# kommen in Phase 6 dazu.
+
+description: Weinen, Abschied, Regen
+
+mood:
+  sad: 1.0
+  calm: 0.4
+  romance: 0.2
+  action: -0.5
+  funny: -0.7
+
+pool: 0.3
+
+weights:
+  mood: 1.0
+  energy: 0.2
+  quality: 0.3
+  repeat: 0.3
+  dialog: 0.4

@@ -1,0 +1,21 @@
+# Stil "Funny": übertriebene Reaktionen, Chibi-Gesichter, Streit mit Pointe.
+# Phase 4 nutzt nur mood, pool und weights. BPM-Bereich, Schnittrate, Übergänge und Effekte
+# kommen in Phase 6 dazu.
+
+description: Übertriebene Reaktionen und Pointen
+
+mood:
+  funny: 1.0
+  action: 0.2
+  romance: 0.1
+  calm: -0.3
+  sad: -0.7
+
+pool: 0.3
+
+weights:
+  mood: 1.0
+  energy: 0.4
+  quality: 0.3
+  repeat: 0.3
+  dialog: 0.1      # bei Witzen darf ruhig geredet werden

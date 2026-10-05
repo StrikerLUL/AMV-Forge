@@ -135,9 +135,98 @@ motion:
   hwaccel: ""
 
 planner:
-  # Bewegung des Clips passend zur Energie des Songs wählen (Drop = viel Bewegung, Intro = ruhig).
-  match_intensity: true
-  # Aus den so vielen am besten passenden Clips wird zufällig einer gewählt (Abwechslung).
+  # Aus den so vielen am besten bewerteten Clips wird zufällig einer gewählt (Abwechslung).
   pick_from_top: 8
   # Nicht öfter hintereinander Clips aus derselben Folge.
   max_same_episode_in_row: 2
+  # Score-Formel (Phase 4), Gewichte ohne --style. Jeder Stil in backend/styles/ überschreibt sie:
+  # Score = mood*Stimmung + energy*(1 - |Bewegung - Song-Energie|) + character*Figuren
+  #         + quality*Qualität - repeat*Wiederholung - dialog*Sprache im Clip
+  weights:
+    mood: 0.0        # passt die Stimmung des Clips zum Stil?
+    energy: 1.0      # passt die Bewegung zur Energie des Songs an der Stelle (Drop = viel Bewegung)?
+    character: 0.0   # gewünschte Figuren im Bild (ab Phase 5)
+    quality: 0.3     # Bildqualität 0-1
+    repeat: 0.3      # Abzug, wenn die Folge in den letzten Clips schon oft dran war
+    dialog: 0.0      # Abzug für Clips, in denen geredet wird (Mundbewegung ohne Ton wirkt komisch)
+  # So viele der letzten Clips zählen für "repeat"
+  repeat_window: 6
+
+# ---------------------------------------------------------------- Phase 4: Stimmungserkennung
+
+keyframes:
+  # Aus jedem Clip werden 1-3 Standbilder genommen (je nach Länge), CLIP schaut sie sich an.
+  fps: 4                    # so dicht wird die Folge dafür abgetastet (4 = alle 0,25 s)
+  height: 224               # Höhe der Standbilder in Pixeln (CLIP arbeitet mit 224x224)
+  max_per_clip: 3
+  seconds_per_frame: 1.5    # pro angefangene 1,5 s Cliplänge ein Standbild (höchstens max_per_clip)
+  edge_seconds: 0.15        # Abstand zum Schnitt, dort sieht man oft noch die vorherige Szene
+  # Ein Vorschaubild pro Clip (für 'moods' und später die Web-UI), ca. 15 KB pro Bild
+  cache_dir: data/cache/keyframes
+  jpeg_quality: 80
+
+clip:
+  # Bilderkennung ohne eigenes Training (Zero-Shot): CLIP vergleicht jedes Standbild mit den Sätzen in
+  # backend/prompts/clip_prompts.yaml. Das Modell wird beim ersten Lauf heruntergeladen (ca. 600 MB).
+  enabled: true
+  model: ViT-B-32
+  pretrained: laion2b_s34b_b79k
+  # auto = GPU, wenn torch.cuda.is_available(), sonst CPU. Oder fest: cuda, cpu
+  device: auto
+  batch_size: 64
+  # sides = 16:9-Bild in zwei quadratische Hälften teilen (nichts wird abgeschnitten),
+  # center = nur die Mitte (halb so viel Rechenzeit), pad = Balken oben und unten
+  crop: sides
+  prompts: backend/prompts/clip_prompts.yaml
+  # CLIP-Embedding pro Clip, eine .npz-Datei pro Folge. Damit gehen neue Prompts ohne neues Dekodieren.
+  cache_dir: data/cache/clip
+
+episode_audio:
+  sample_rate: 16000
+  # silero = Sprache mit Silero VAD erkennen, none = aus (dann zählen nur Untertitel als Dialog)
+  vad: silero
+  vad_threshold: 0.5
+  # Ab diesem Anteil Sprache (0-1) gilt ein Clip als Dialog-Szene
+  dialog_min_share: 0.3
+
+subtitles:
+  enabled: true
+  # Bevorzugte Sprachen: Endung der Datei ("Folge.de.ass") oder Sprach-Tag der Spur in MKV/MP4
+  languages: [de, ger, deu, en, eng]
+  # Dateien, Spuren und ASS-Styles mit diesen Namen sind Schilder oder Liedtexte, kein Dialog
+  skip_pattern: "(?i)(sign|song|lyric|kara|forced|\\btitles?\\b|\\bop\\b|\\bed\\b)"
+  # Eine Zeile gehört zum Clip, wenn sie sich so lange mit ihm überschneidet (Sekunden)
+  min_overlap_seconds: 0.2
+  # Mehrsprachiges Satz-Modell (ca. 470 MB): vergleicht jede Zeile mit backend/prompts/dialog_prompts.yaml.
+  # Leer = keine Einordnung, die Zeilen zählen dann nur als "hier wird geredet".
+  model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+  device: auto
+  prompts: backend/prompts/dialog_prompts.yaml
+  # Eingebettete Untertitel werden einmal hierhin extrahiert
+  cache_dir: data/cache/subtitles
+
+mood:
+  # Wie stark jedes Signal in jede Stimmung eingeht (0 = gar nicht). Alle Signale werden vorher
+  # innerhalb der Staffel auf 0-1 gebracht. Fehlt ein Signal (keine Untertitel, CLIP nicht
+  # installiert), zählen nur die übrigen.
+  #   clip      = Bildinhalt laut CLIP
+  #   motion    = Bewegung: viel -> action, wenig -> romance, sad, calm
+  #   audio     = Ton der Folge: laut -> action, funny; leise ohne Sprache -> romance, sad, calm
+  #   subtitles = was gesagt wird (Geständnis, Streit, Witz ...)
+  weights:
+    clip:      {romance: 1.0, action: 0.8, sad: 1.0, funny: 1.0, calm: 0.8}
+    motion:    {romance: 0.3, action: 1.0, sad: 0.2, funny: 0.0, calm: 0.6}
+    audio:     {romance: 0.4, action: 0.4, sad: 0.2, funny: 0.2, calm: 0.4}
+    subtitles: {romance: 0.6, action: 0.3, sad: 0.6, funny: 0.6, calm: 0.0}
+
+quality:
+  # Clips unter min_score kommen nie ins Edit.
+  min_score: 0.4
+  dark: 0.06              # hellste Stelle der Standbilder darunter (0-1): Schwarzbild
+  bright: 0.95            # dunkelste Stelle darüber: Weißbild
+  flat: 0.03              # Kontrast darunter: einfarbiges Bild
+  # CLIP-Wahrscheinlichkeit für eine Gruppe unter "quality" in clip_prompts.yaml (Text, Abspann,
+  # Logo, Unschärfe), ab der ein Clip rausfliegt
+  prompt_threshold: 0.5
+  # Die unschärfsten so viel Prozent der Staffel (Laplace-Schärfe) gelten als verwackelt
+  blurry_share: 0.03

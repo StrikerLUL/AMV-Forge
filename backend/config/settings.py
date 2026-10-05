@@ -120,10 +120,81 @@ class MotionSettings:
 
 
 @dataclass(frozen=True)
+class ScoreWeights:
+    """Gewichte der Score-Formel aus CLAUDE.md (w_m, w_e, w_c, w_q, w_r, w_d)."""
+
+    mood: float = 0.0
+    energy: float = 1.0
+    character: float = 0.0
+    quality: float = 0.3
+    repeat: float = 0.3
+    dialog: float = 0.0
+
+
+@dataclass(frozen=True)
 class PlannerSettings:
-    match_intensity: bool
     pick_from_top: int
     max_same_episode_in_row: int
+    weights: ScoreWeights
+    repeat_window: int
+
+
+@dataclass(frozen=True)
+class KeyframeSettings:
+    fps: float
+    height: int
+    max_per_clip: int
+    seconds_per_frame: float
+    edge_seconds: float
+    cache_dir: Path
+    jpeg_quality: int
+
+
+@dataclass(frozen=True)
+class ClipModelSettings:
+    enabled: bool
+    model: str
+    pretrained: str
+    device: str
+    batch_size: int
+    crop: str
+    prompts: Path
+    cache_dir: Path
+
+
+@dataclass(frozen=True)
+class EpisodeAudioSettings:
+    sample_rate: int
+    vad: str
+    vad_threshold: float
+    dialog_min_share: float
+
+
+@dataclass(frozen=True)
+class SubtitleSettings:
+    enabled: bool
+    languages: tuple[str, ...]
+    skip_pattern: str
+    min_overlap_seconds: float
+    model: str
+    device: str
+    prompts: Path
+    cache_dir: Path
+
+
+@dataclass(frozen=True)
+class MoodSettings:
+    weights: dict[str, dict[str, float]]  # Signal -> Stimmung -> Gewicht
+
+
+@dataclass(frozen=True)
+class QualitySettings:
+    min_score: float
+    dark: float
+    bright: float
+    flat: float
+    prompt_threshold: float
+    blurry_share: float
 
 
 @dataclass(frozen=True)
@@ -139,6 +210,12 @@ class Settings:
     cuts: CutSettings
     motion: MotionSettings
     planner: PlannerSettings
+    keyframes: KeyframeSettings
+    clip: ClipModelSettings
+    episode_audio: EpisodeAudioSettings
+    subtitles: SubtitleSettings
+    mood: MoodSettings
+    quality: QualitySettings
 
 
 def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -158,6 +235,9 @@ def load_settings(path: Path | None = None) -> Settings:
     if path is not None:
         raw = _merge(raw, yaml.safe_load(path.read_text(encoding="utf-8")) or {})
     index = raw["index"]
+    planner = raw["planner"]
+    clip = raw["clip"]
+    subs = raw["subtitles"]
     return Settings(
         quick=QuickSettings(**raw["quick"]),
         scenes=SceneSettings(**raw["scenes"]),
@@ -174,5 +254,17 @@ def load_settings(path: Path | None = None) -> Settings:
         music=MusicSettings(**{**raw["music"], "allin1_work_dir": Path(raw["music"]["allin1_work_dir"])}),
         cuts=CutSettings(**raw["cuts"]),
         motion=MotionSettings(**{**raw["motion"], "cache_dir": Path(raw["motion"]["cache_dir"])}),
-        planner=PlannerSettings(**raw["planner"]),
+        planner=PlannerSettings(**{**planner, "weights": ScoreWeights(**planner["weights"])}),
+        keyframes=KeyframeSettings(**{**raw["keyframes"], "cache_dir": Path(raw["keyframes"]["cache_dir"])}),
+        clip=ClipModelSettings(**{**clip, "prompts": Path(clip["prompts"]), "cache_dir": Path(clip["cache_dir"])}),
+        episode_audio=EpisodeAudioSettings(**raw["episode_audio"]),
+        subtitles=SubtitleSettings(**{
+            **subs,
+            "languages": tuple(str(lang).lower() for lang in subs["languages"]),
+            "model": subs.get("model") or "",
+            "prompts": Path(subs["prompts"]),
+            "cache_dir": Path(subs["cache_dir"]),
+        }),
+        mood=MoodSettings(weights={signal: dict(w) for signal, w in raw["mood"]["weights"].items()}),
+        quality=QualitySettings(**raw["quality"]),
     )

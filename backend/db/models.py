@@ -27,6 +27,7 @@ class Season(SQLModel, table=True):
     tags: list[dict] = Field(default_factory=list, sa_column=Column(JSON))  # [{"name": ..., "rank": ...}]
     metadata_done: bool = False
     indexed_at: Optional[datetime] = None
+    mood_signature: Optional[str] = None  # Phase 4: Stimmung aller Clips berechnet (mit diesen Signalen)
 
 
 class Episode(SQLModel, table=True):
@@ -48,6 +49,12 @@ class Episode(SQLModel, table=True):
     skips_source: Optional[str] = None  # "aniskip", "fingerprint", "none" oder None = noch nicht gesucht
     scenes_signature: Optional[str] = None  # Fingerabdruck von Datei + Einstellungen + OP/ED
     motion_signature: Optional[str] = None  # Phase 3: Bewegung für alle Clips dieser Szenen gemessen
+    # Phase 4: Standbilder + CLIP-Embeddings, CLIP-Vergleich mit den Prompts, Ton, Untertitel
+    visual_signature: Optional[str] = None
+    tags_signature: Optional[str] = None
+    audio_signature: Optional[str] = None
+    subtitle_signature: Optional[str] = None
+    subtitle_source: Optional[str] = None  # z. B. "Folge.de.ass", "Spur 2 (ger)" oder "keine"
 
 
 class SkipSegment(SQLModel, table=True):
@@ -62,7 +69,7 @@ class SkipSegment(SQLModel, table=True):
 
 
 class Clip(SQLModel, table=True):
-    """Eine Szene ohne OP/ED. Ab Phase 4 kommt hier die Stimmung dazu."""
+    """Eine Szene ohne OP/ED mit allem, was die Analyse über sie weiß."""
 
     id: Optional[int] = Field(default=None, primary_key=True)
     episode_id: int = Field(foreign_key="episode.id", index=True)
@@ -70,6 +77,24 @@ class Clip(SQLModel, table=True):
     end: float
     motion: Optional[float] = None  # durchschnittliche Bewegung (Optical Flow)
     motion_peak: Optional[float] = None  # Zeitpunkt der stärksten Bewegung (Sekunden in der Folge)
+    # Phase 4: Bild
+    thumbnail: Optional[str] = None  # Vorschaubild (JPG, mittleres Standbild)
+    brightness_min: Optional[float] = None  # Helligkeit 0-1 des dunkelsten / hellsten Standbilds
+    brightness_max: Optional[float] = None
+    contrast: Optional[float] = None
+    sharpness: Optional[float] = None
+    clip_tags: Optional[dict] = Field(default=None, sa_column=Column(JSON))  # CLIP: Gruppe -> Wahrscheinlichkeit
+    clip_top: Optional[str] = None  # CLIP-Satz, der am besten passt
+    # Phase 4: Ton und Untertitel
+    loudness: Optional[float] = None  # dBFS
+    speech: Optional[float] = None  # Anteil Sprache 0-1 (Silero VAD)
+    subtitle: Optional[str] = None  # Untertiteltext im Clip
+    dialog_tags: Optional[dict] = Field(default=None, sa_column=Column(JSON))  # Untertitel: Gruppe -> Wahrscheinlichkeit
+    # Phase 4: Ergebnis
+    mood: Optional[dict] = Field(default=None, sa_column=Column(JSON))  # romance, action, sad, funny, calm je 0-1
+    quality: Optional[float] = None  # 0-1
+    quality_issue: Optional[str] = None  # Grund fürs Aussortieren, z. B. "schwarz" oder "text"
+    dialog: Optional[bool] = None  # wird im Clip geredet?
 
 
 class Character(SQLModel, table=True):

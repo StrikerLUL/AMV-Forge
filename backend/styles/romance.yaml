@@ -1,0 +1,24 @@
+# Stil "Romance": ruhige Paar-Szenen, Blicke, Erröten, Sonnenuntergang.
+# Phase 4 nutzt nur mood, pool und weights. BPM-Bereich, Schnittrate, Übergänge und Effekte
+# kommen in Phase 6 dazu.
+
+description: Ruhige Paar-Szenen, Blicke, Erröten
+
+# Ziel-Stimmung: positiv = erwünscht, negativ = unerwünscht (je -1 bis 1)
+mood:
+  romance: 1.0
+  calm: 0.5
+  sad: 0.1
+  funny: -0.2
+  action: -0.6
+
+# Nur dieser Anteil der Clips (die am besten zur Ziel-Stimmung passen) kommt überhaupt in Frage
+pool: 0.3
+
+# Gewichte der Score-Formel (fehlende Werte kommen aus planner.weights in default.yaml)
+weights:
+  mood: 1.0
+  energy: 0.25     # Bewegung soll nur grob zur Song-Energie passen
+  quality: 0.3
+  repeat: 0.3
+  dialog: 0.4      # redende Münder stören in ruhigen Szenen besonders
