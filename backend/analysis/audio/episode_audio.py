@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import warnings
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
@@ -74,7 +75,9 @@ class SileroVad:
 
         self._torch = torch
         self._detect = get_speech_timestamps
-        self.model = load_silero_vad()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)  # torch.jit.load ist "deprecated", läuft aber
+            self.model = load_silero_vad()
         self.threshold = threshold
         self.name = f"silero/{threshold}"
 

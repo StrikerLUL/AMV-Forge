@@ -228,5 +228,5 @@ quality:
   # CLIP-Wahrscheinlichkeit für eine Gruppe unter "quality" in clip_prompts.yaml (Text, Abspann,
   # Logo, Unschärfe), ab der ein Clip rausfliegt
   prompt_threshold: 0.5
-  # Die unschärfsten so viel Prozent der Staffel (Laplace-Schärfe) gelten als verwackelt
-  blurry_share: 0.03
+  # Clips mit weniger als 20 % der typischen Schärfe der Staffel (Median) gelten als verwackelt
+  blurry_ratio: 0.2

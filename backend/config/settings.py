@@ -9,6 +9,15 @@ from typing import Any
 import yaml
 
 DEFAULT_CONFIG = Path(__file__).with_name("default.yaml")
+PROJECT_ROOT = DEFAULT_CONFIG.parent.parent.parent
+
+
+def project_file(value: str) -> Path:
+    """Dateien, die zum Projekt gehören (Prompts): relativ zum Arbeitsordner oder sonst zum Projektordner."""
+    path = Path(value)
+    if path.is_absolute() or path.exists():
+        return path
+    return PROJECT_ROOT / path
 
 
 @dataclass(frozen=True)
@@ -194,7 +203,7 @@ class QualitySettings:
     bright: float
     flat: float
     prompt_threshold: float
-    blurry_share: float
+    blurry_ratio: float
 
 
 @dataclass(frozen=True)
@@ -256,13 +265,15 @@ def load_settings(path: Path | None = None) -> Settings:
         motion=MotionSettings(**{**raw["motion"], "cache_dir": Path(raw["motion"]["cache_dir"])}),
         planner=PlannerSettings(**{**planner, "weights": ScoreWeights(**planner["weights"])}),
         keyframes=KeyframeSettings(**{**raw["keyframes"], "cache_dir": Path(raw["keyframes"]["cache_dir"])}),
-        clip=ClipModelSettings(**{**clip, "prompts": Path(clip["prompts"]), "cache_dir": Path(clip["cache_dir"])}),
+        clip=ClipModelSettings(**{
+            **clip, "prompts": project_file(clip["prompts"]), "cache_dir": Path(clip["cache_dir"]),
+        }),
         episode_audio=EpisodeAudioSettings(**raw["episode_audio"]),
         subtitles=SubtitleSettings(**{
             **subs,
             "languages": tuple(str(lang).lower() for lang in subs["languages"]),
             "model": subs.get("model") or "",
-            "prompts": Path(subs["prompts"]),
+            "prompts": project_file(subs["prompts"]),
             "cache_dir": Path(subs["cache_dir"]),
         }),
         mood=MoodSettings(weights={signal: dict(w) for signal, w in raw["mood"]["weights"].items()}),

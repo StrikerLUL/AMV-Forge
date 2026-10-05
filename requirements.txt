@@ -13,5 +13,13 @@ httpx>=0.27
 # Phase 3: keine neuen Pflichtpakete. OpenCV (Optical Flow) kommt mit scenedetect, scipy mit librosa.
 # Optional für genauere Song-Analyse: allin1 (Anleitung in der README, unter Windows oft schwierig).
 
+# Phase 4: Stimmungserkennung
+# PyTorch VORHER mit CUDA installieren (README, Phase 4), sonst holt pip hier die CPU-Version:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+open_clip_torch>=2.24
+silero-vad>=6.2.3          # ab 6.2.3 ohne torchaudio (das würde sonst die CUDA-Version von torch stören)
+pysubs2>=1.6
+sentence-transformers>=3.0
+
 # Tests
 pytest>=8.0

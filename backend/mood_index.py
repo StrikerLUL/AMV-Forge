@@ -26,7 +26,7 @@ from backend.analysis.audio.episode_audio import SileroVad, SpeechDetector, anal
 from backend.analysis.audio.subtitles import (
     DialogModel, SentenceDialogModel, average_tags, find_subtitles, lines_in, load_lines, sentence_model_installed,
 )
-from backend.analysis.mood import MOODS, ClipSignals, mood_vectors, percentile_ranks
+from backend.analysis.mood import MOODS, ClipSignals, mood_vectors
 from backend.analysis.video import clip_tags
 from backend.analysis.video.clip_tags import ImageTextEmbedder, OpenClipModel, PromptSet, load_prompts, zero_shot
 from backend.analysis.video.keyframes import iter_keyframes, save_jpeg
@@ -195,9 +195,11 @@ def visual_pass(session: Session, settings: Settings, work: list[MoodWork], mode
         has_embeddings = models.clip_name() == NONE or embeddings_file(settings, w.episode_id, expected).exists()
         if ep.visual_signature == expected and has_embeddings and not force:
             continue
-        clips = _clips(session, w.episode_id)
         model = models.clip() if models.clip_name() != NONE else None
         actual = _visual_signature(ep, settings, model.name if model else NONE)
+        if ep.visual_signature == actual and model is None and not force:
+            continue  # CLIP ließ sich nicht laden: Standbilder ohne CLIP sind schon da, nicht nochmal dekodieren
+        clips = _clips(session, w.episode_id)
         log.info("Folge %d: Standbilder%s ...", w.number, " + CLIP" if model else "")
         started = time.monotonic()
 
@@ -285,9 +287,10 @@ def tags_pass(session: Session, settings: Settings, work: list[MoodWork], models
                 log.warning("Folge %d: CLIP fehlt, Vergleich mit den Prompts bleibt offen", w.number)
                 continue
             prompts = prompts or load_prompts(settings.clip.prompts)
-            data = np.load(npz)
-            tags = zero_shot(data["embeddings"], models.text_embeddings(model, prompts), prompts, model.logit_scale)
-            by_id = dict(zip(data["clip_ids"].tolist(), tags))
+            with np.load(npz) as data:  # mit "with", sonst bleibt die Datei unter Windows gesperrt
+                embeddings, clip_ids = data["embeddings"], data["clip_ids"].tolist()
+            tags = zero_shot(embeddings, models.text_embeddings(model, prompts), prompts, model.logit_scale)
+            by_id = dict(zip(clip_ids, tags))
             for clip in clips:
                 hit = by_id.get(clip.id)
                 clip.clip_tags = hit.probs if hit else None
@@ -313,6 +316,8 @@ def audio_pass(session: Session, settings: Settings, work: list[MoodWork], model
         if ep.audio_signature == signature(ep.scenes_signature, cfg.sample_rate, models.vad_name()) and not force:
             continue
         vad = models.vad() if models.vad_name() != NONE else None
+        if ep.audio_signature == signature(ep.scenes_signature, cfg.sample_rate, NONE) and vad is None and not force:
+            continue  # Silero ließ sich nicht laden: Lautstärke ist schon da
         log.info("Folge %d: Ton%s ...", w.number, " + Sprache" if vad else "")
         clips = _clips(session, w.episode_id)
         try:
@@ -405,14 +410,15 @@ def mood_pass(session: Session, settings: Settings, season: Season, force: bool,
         for c in clips
     ]
     moods = mood_vectors(signals, settings.mood.weights)
-    sharp_ranks = percentile_ranks([c.sharpness for c in clips])
+    known = [c.sharpness for c in clips if c.sharpness is not None]
+    typical_sharpness = float(np.median(known)) if known else None
     issues: Counter[str] = Counter()
-    for clip, mood, sharp in zip(clips, moods, sharp_ranks):
+    for clip, mood in zip(clips, moods):
         stats = None
         if clip.brightness_min is not None and clip.brightness_max is not None:
             stats = ClipStats(clip.brightness_min, clip.brightness_max, clip.contrast or 0.0, clip.sharpness or 0.0)
         quality_probs = {g: p for g, p in (clip.clip_tags or {}).items() if g not in MOODS and g != clip_tags.NEUTRAL}
-        q = clip_quality(stats, sharp, quality_probs, settings.quality)
+        q = clip_quality(stats, typical_sharpness, quality_probs, settings.quality)
         clip.mood, clip.quality, clip.quality_issue = mood, q.score, q.issue
         if q.score < settings.quality.min_score:
             issues[q.issue or "niedrig"] += 1

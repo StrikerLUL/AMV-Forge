@@ -62,14 +62,14 @@ def combine_stats(frames: Sequence[FrameStats]) -> ClipStats | None:
 
 def clip_quality(
     stats: ClipStats | None,
-    sharpness_rank: float | None,
+    typical_sharpness: float | None,
     quality_probs: dict[str, float],
     cfg: QualitySettings,
 ) -> Quality:
     """Qualität 0-1. Harte Fehler (schwarz, weiß, einfarbig, Text ...) ergeben 0 und einen Grund.
 
-    sharpness_rank: Schärfe als Rang in der Staffel (0 = unschärfster Clip). quality_probs: CLIP-
-    Wahrscheinlichkeit pro Qualitätsgruppe (z. B. "text", "blurry").
+    typical_sharpness: Median der Schärfe in der Staffel. quality_probs: CLIP-Wahrscheinlichkeit pro
+    Qualitätsgruppe (z. B. "text", "blurry").
     """
     if stats is not None:
         if stats.brightness_max < cfg.dark:
@@ -81,7 +81,7 @@ def clip_quality(
     for group, prob in sorted(quality_probs.items(), key=lambda kv: -kv[1]):
         if prob >= cfg.prompt_threshold:
             return Quality(0.0, group)
-    if sharpness_rank is not None and sharpness_rank < cfg.blurry_share:
+    if stats is not None and typical_sharpness and stats.sharpness < cfg.blurry_ratio * typical_sharpness:
         return Quality(0.2, "unscharf")
     # Kein harter Fehler: leichter Abzug, je mehr CLIP schon in Richtung Text/Unschärfe tendiert
     penalty = sum(quality_probs.values()) / max(cfg.prompt_threshold, 1e-6)
