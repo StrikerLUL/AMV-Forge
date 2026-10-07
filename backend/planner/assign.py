@@ -2,7 +2,8 @@
 
 Phase 1: zufällig (assign_random). Phase 3: Bewegung passend zur Song-Energie, und der stärkste
 Bewegungsmoment des Clips landet genau auf einem Beat (assign_to_beats). Phase 4: Auswahl nach der
-Score-Formel (scoring.py) mit Stimmung, Qualität, Wiederholung und Dialog.
+Score-Formel (scoring.py) mit Stimmung, Qualität, Wiederholung und Dialog. Phase 5: gewünschte
+Figuren (--characters) und nicht zu oft dieselbe Figur hintereinander.
 """
 
 from __future__ import annotations
@@ -11,10 +12,11 @@ import logging
 import random
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 from backend.analysis.video.scenes import Scene
 from backend.config.settings import ScoreWeights
-from backend.planner.scoring import ENERGY_ONLY, score_clip, style_pool
+from backend.planner.scoring import ENERGY_ONLY, character_tiers, score_clip, style_pool
 from backend.planner.slots import Slot
 
 log = logging.getLogger(__name__)
@@ -35,10 +37,16 @@ class Candidate:
     mood: dict[str, float] | None = None
     quality: float | None = None
     speech: float | None = None
+    # Ab Phase 5: AniList-ID der Figur -> Sicherheit 0-1
+    characters: dict[int, float] | None = None
 
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+    @property
+    def character_ids(self) -> frozenset[int]:
+        return frozenset(self.characters or {})
 
 
 @dataclass(frozen=True)
@@ -145,6 +153,14 @@ def _can_align(cand: Candidate, slot: Slot) -> bool:
     return any(cand.start - 1e-6 <= cand.peak - o <= latest + 1e-6 for o in slot.hits)
 
 
+def repeated_characters(result: Sequence[Assignment], count: int, exempt: frozenset[int]) -> frozenset[int]:
+    """Figuren, die in jedem der letzten count Clips vorkamen (ohne die ausdrücklich gewünschten)."""
+    if count <= 0 or len(result) < count:
+        return frozenset()
+    sets = [a.candidate.character_ids if a.candidate else frozenset() for a in result[-count:]]
+    return frozenset.intersection(*sets) - exempt
+
+
 def assign_to_beats(
     slots: list[Slot],
     candidates: list[Candidate],
@@ -155,17 +171,23 @@ def assign_to_beats(
     target: dict[str, float] | None = None,
     pool_share: float = 1.0,
     repeat_window: int = 6,
+    characters: Sequence[int] = (),
+    max_same_character_in_row: int = 0,
 ) -> list[Assignment]:
     """Greedy, Slot für Slot: passend lange Clips, möglichst mit Peak auf dem Beat, nach Score sortiert.
 
-    Mit target (Ziel-Stimmung eines Stils) kommen nur die pool_share besten Clips nach Stimmung in
-    Frage. Aus den pick_from_top besten nach Score wird zufällig gewählt, damit nicht jedes Edit gleich
-    aussieht. Kein Clip doppelt und nicht zu oft dieselbe Folge hintereinander.
+    Mit characters (AniList-IDs) kommen zuerst Clips mit allen diesen Figuren dran, sind die aufgebraucht,
+    Clips mit mindestens einer. Mit target (Ziel-Stimmung eines Stils) kommen davon nur die pool_share
+    besten nach Stimmung in Frage. Aus den pick_from_top besten nach Score wird zufällig gewählt, damit
+    nicht jedes Edit gleich aussieht. Kein Clip doppelt, nicht zu oft dieselbe Folge oder Figur hintereinander.
     """
     if not candidates:
         raise ValueError("Keine Clips zur Auswahl.")
     ranks = _motion_ranks(candidates)
-    in_style = style_pool(candidates, target, pool_share) if target else None
+    wanted = frozenset(characters)
+    tiers = character_tiers(candidates, list(wanted)) if wanted else []
+    among = sorted(tiers[-1]) if tiers and tiers[-1] else None
+    in_style = style_pool(candidates, target, pool_share, among) if target else None
     used: set[int] = set()
     result: list[Assignment] = []
 
@@ -181,6 +203,11 @@ def assign_to_beats(
             log.warning("Kein Clip ist %.2f s lang, nehme den längsten.", slot.duration)
             pool = [longest]
 
+        for tier in tiers:  # erst alle gewünschten Figuren, dann mindestens eine
+            narrowed = [i for i in pool if i in tier]
+            if narrowed:
+                pool = narrowed
+                break
         if in_style is not None:
             pool = [i for i in pool if i in in_style] or pool
 
@@ -189,10 +216,15 @@ def assign_to_beats(
             other = [i for i in pool if candidates[i].episode != recent[0]]
             pool = other or pool
 
+        repeated = repeated_characters(result, max_same_character_in_row, wanted)
+        if repeated:
+            pool = [i for i in pool if not candidates[i].character_ids & repeated] or pool
+
         alignable = [i for i in pool if _can_align(candidates[i], slot)]
         pool = alignable or pool
         window = [a.episode for a in result[-repeat_window:]] if repeat_window > 0 else []
-        scores = {i: score_clip(candidates[i], ranks[i], slot.intensity, weights, target, window).total for i in pool}
+        scores = {i: score_clip(candidates[i], ranks[i], slot.intensity, weights, target, window, list(wanted)).total
+                  for i in pool}
         best = sorted(pool, key=lambda i: (-scores[i], i))[: max(1, pick_from_top)]
         idx = rng.choice(best)
         used.add(idx)

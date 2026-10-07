@@ -3,12 +3,13 @@
 Aus einer Anime-Staffel und einem Song automatisch ein beat-synchrones 9:16-Edit für TikTok schneiden.
 Die komplette Projektbeschreibung und Roadmap steht in [CLAUDE.md](CLAUDE.md).
 
-## Stand: Phase 4 (Stimmungserkennung)
+## Stand: Phase 5 (Charaktere)
 
 - **Phase 1, `quick`:** Eine Folge + ein Song → 9:16-MP4, jeder Schnitt exakt auf dem Beat.
 - **Phase 2, `index`:** Eine ganze Staffel (aus einem Ordner oder aus Jellyfin) wird einmal analysiert und landet in `data/amv_forge.sqlite`: Folgen, Szenen ohne Opening/Ending/Recap, Metadaten und Charaktere von AniList, Filler-Markierung von Jikan. Ein zweiter Lauf berechnet nichts neu.
 - **Phase 3, `song` und `edit`:** Der Song wird in Abschnitte (Intro, Verse, Chorus …) zerlegt, Drops werden erkannt. Im Verse wird ruhig geschnitten, im Build-up immer dichter, im Drop zweimal pro Beat. Jeder Clip wird so gelegt, dass sein stärkster Bewegungsmoment genau auf einem Beat liegt, und wilde Clips landen im Drop, ruhige im Intro. `edit` nimmt die Clips aus der ganzen Staffel.
 - **Phase 4, Stimmung und `--style`:** `index` schaut sich jetzt jeden Clip an (CLIP), hört hin (Lautstärke, wird geredet?) und liest die Untertitel. Daraus wird pro Clip ein Stimmungsvektor (romance, action, sad, funny, calm). `edit --style romance` nimmt dann fast nur ruhige Paar-Szenen, `--style hype` fast nur Action. Schwarzbilder, Abspann, Logos und verwackelte Clips fliegen raus. `moods` zeigt, was erkannt wurde, mit Kontaktbögen zum Anschauen.
+- **Phase 5, Figuren und `--characters`:** `index` sucht jetzt in jedem Clip Anime-Gesichter und ordnet sie den Figuren von AniList zu. `edit --characters "Hori,Miyamura"` nimmt dann zuerst Szenen, in denen beide zu sehen sind. `characters` zeigt, wer wie oft erkannt wurde, mit Kontaktbögen der Gesichter zum Prüfen.
 
 ### So läuft `quick` (Phase 1)
 
@@ -52,6 +53,17 @@ Alles passiert in `index`, pro Folge einmal (`backend/mood_index.py`):
 
 Danach wählt `edit` mit der **Score-Formel** (`backend/planner/scoring.py`) aus CLAUDE.md:
 `Score = Stimmung + Energie-Passung + Qualität − Wiederholung − Dialog`, jeweils mit Gewicht. Die Ziel-Stimmung und die Gewichte jedes Stils stehen in `backend/styles/<stil>.yaml` (romance, hype, sad, funny). Mit Stil kommen nur die 30 % der Clips in Frage, die am besten zur Ziel-Stimmung passen, daraus nimmt der Planer pro Slot einen der 8 besten.
+
+### So läuft die Figurenerkennung (Phase 5)
+
+Auch das passiert in `index` (`backend/character_index.py`), erst pro Folge, dann einmal für die ganze Staffel:
+
+1. **Gesichter finden** (`backend/analysis/video/faces.py`): Ein YOLOv8-Modell, das auf Anime-Gesichter trainiert ist ([deepghs/anime_face_detection](https://huggingface.co/deepghs/anime_face_detection)), schaut sich dieselben Standbilder an wie CLIP, nur größer (480 Pixel hoch). YOLO („You Only Look Once“) bewertet das ganze Bild in einem Durchgang und liefert Rahmen um alles, was wie ein Gesicht aussieht. Viele Rahmen liegen fast übereinander, die *Non-Maximum Suppression* behält davon nur den sichersten. Das Modell ist eine ONNX-Datei und läuft mit `onnxruntime`, ohne PyTorch. Gesichter kleiner als 7 % der Bildhöhe werden ignoriert, die sind zum Wiedererkennen zu klein.
+2. **Gesicht als Embedding**: Um jedes Gesicht wird ein Quadrat ausgeschnitten, 1,8-mal so groß, damit Haare und Frisur mit drauf sind. CLIP macht daraus ein Embedding. Gesichter derselben Figur liegen dort nah beieinander (Haarfarbe, Frisur, Augen, Brille). Rahmen und Embeddings liegen pro Folge in `data/cache/faces/`.
+3. **Vorbilder** (`backend/sources/character_images.py`): Die Bilder der Haupt- und Nebenfiguren von AniList werden einmal nach `data/cache/characters/` geladen. Eigene Screenshots in `data/characters/<Name>/` zählen zusätzlich (siehe unten).
+4. **Zuordnen** (`backend/analysis/characters.py`): Die AniList-Bilder sind oft anders gezeichnet als die Folgen. Deshalb sucht das Tool zuerst nur die paar Gesichter, die einem Vorbild *eindeutig* ähnlicher sind als dem Rest der Staffel. Deren Durchschnitt ist das neue Vorbild, jetzt im Zeichenstil der Folgen, und mit ihm kommen in jeder Runde mehr sichere Treffer dazu. Am Ende gehört ein Gesicht zu der Figur, der es deutlich ähnlicher ist als der zweitähnlichsten. Ist es zwei Figuren etwa gleich ähnlich (oder keiner), bleibt es „unbekannt“. Die Sicherheit (0,5–1) steht pro Gesicht und Clip in der Datenbank.
+
+Ändern sich nur die Vorbilder oder die Einstellungen unter `characters:`, wird nur neu zugeordnet, das dauert Sekunden. `edit --characters` nutzt das so (`backend/planner/assign.py`): Erst kommen Clips mit allen gewünschten Figuren dran, sind die aufgebraucht, Clips mit mindestens einer davon, erst dann Wiederholungen. Mit `--style` werden die 30 % ruhigsten (bzw. wildesten …) Clips unter diesen Clips gesucht, nicht in der ganzen Staffel. In der Score-Formel zählt `character` mit, wie sicher die Figuren im Bild sind. Außerdem kommt keine Figur öfter als zweimal hintereinander, außer denen aus `--characters`.
 
 ## Installation (Windows)
 
@@ -221,6 +233,69 @@ python -c "import allin1; print('allin1 ok')"
 ```
 
 Klappt `pip install natten` nicht, nicht stundenlang daran festbeißen: Entweder beim librosa-Fallback bleiben oder AMV-Forge in WSL2 (Ubuntu unter Windows) laufen lassen, dort gibt es fertige NATTEN-Pakete. Nach einer erfolgreichen Installation einen schon analysierten Song mit `song "<pfad>" --analyzer allin1` neu analysieren. allin1 nutzt die NVIDIA-GPU, wenn PyTorch CUDA findet, das steht in der Ausgabe.
+
+## Benutzung: Figuren (Phase 5)
+
+### Paket installieren (einmal)
+
+```bat
+pip install -r requirements.txt
+```
+
+Neu ist nur `onnxruntime` für den Gesichtsdetektor. Beim ersten `index` lädt er das Modell von Hugging Face (einmalig, wie CLIP). Der Detektor ist klein und rechnet auf der CPU, die Ausgabe sagt „Gesichtsdetektor rechnet auf der CPU“. Das reicht. Wer ihn auf die Grafikkarte legen will: `pip uninstall -y onnxruntime` und dann `pip install onnxruntime-directml` (Windows, läuft über DirectX 12 auf jeder Grafikkarte). Die Ausgabe sagt dann „rechnet auf der GPU (DmlExecutionProvider)“. CLIP für die Gesichter läuft wie in Phase 4 auf der GPU, wenn PyTorch CUDA findet.
+
+### Staffel neu indizieren
+
+```bat
+python -m backend.cli index --source folder --path "P:\Anime\Horimiya\S1"
+```
+
+Neu gerechnet werden nur die Gesichter (pro Folge ein Durchlauf) und die Zuordnung. Pro Folge steht da z. B. „Folge 3: 912 Gesichter in 301 von 380 Clips“, am Ende „Figuren zugeordnet: … von … Gesichtern“, wie viele Clips jede Figur hat und wie oft die Hauptfiguren zusammen im Bild sind. Für die Bilder von AniList muss `index` ohne `--no-api` laufen.
+
+### Anschauen, was erkannt wurde
+
+```bat
+python -m backend.cli characters --season 1
+python -m backend.cli characters --season 1 --show "Hori,Miyamura"
+```
+
+`characters` zeigt pro Figur Clips, Gesichter, durchschnittliche Sicherheit und Zahl der Vorbilder und schreibt Kontaktbögen nach `data/renders/`:
+
+- `figur_s1_<name>.jpg`: links das Vorbild (so wie CLIP es sieht), dann Gesichter dieser Figur von „ganz sicher“ bis „gerade noch“ (`p0.95` … `p0.62`). Sind auch die unsicheren noch die richtige Figur, passt alles.
+- `figur_s1_unbekannt.jpg`: die größten Gesichter, die keiner Figur zugeordnet wurden. Ist hier oft Hori dabei, wurde sie verpasst.
+- `figuren_s1_hori_miyamura.jpg`: Szenen, in denen beide erkannt wurden.
+
+Ohne `--show` gibt es Bögen für alle Hauptfiguren.
+
+### Edit mit Figuren
+
+```bat
+python -m backend.cli edit --season 1 --song "C:\Musik\song.mp3" --characters "Hori,Miyamura" --style romance --seed 7 --preview --out data\renders\paar.mp4
+```
+
+Ein Teil des Namens reicht („Hori“ findet „Kyouko Hori“, bei gleichem Nachnamen gewinnt die Hauptfigur). Die Ausgabe zeigt, welche Figur gemeint ist, wie viele Clips beide zusammen haben und am Ende „Figuren im Edit (… Clips): beide 21, nur Kyouko Hori 2, nur Izumi Miyamura 1, ohne 0“. In der `.plan.json` stehen pro Clip die erkannten Figuren mit Sicherheit.
+
+### Wenn eine Figur schlecht erkannt wird
+
+Häufigster Grund: Das AniList-Bild sieht anders aus als die Figur im Anime. Dann eigene Vorbilder dazulegen, 3–5 Screenshots, auf denen das Gesicht gut zu sehen ist (PNG oder JPG, ein Ordner pro Figur, der Name wird wie bei `--characters` gesucht):
+
+```text
+data\characters\Hori\1.png
+data\characters\Hori\2.png
+data\characters\Miyamura\1.png
+```
+
+Danach `index` wie oben: Es wird nur neu zugeordnet, das dauert Sekunden. Die Einstellungen stehen unter `characters:` in `default.yaml`:
+
+| Einstellung | Wirkung |
+| --- | --- |
+| `min_probability` (0.6) | höher = weniger, aber sicherere Treffer; niedriger = mehr Treffer, mehr Verwechslungen |
+| `roles` | welche Figuren von AniList gesucht werden (`MAIN`, `SUPPORTING`, `BACKGROUND`) |
+| `scale` (50) | wie schnell ein kleiner Abstand zwischen zwei Figuren als sicher gilt |
+| `faces.min_size` (0.07) | kleinste Gesichtsgröße (Anteil der Bildhöhe), kleiner = mehr Gesichter aus der Ferne |
+| `planner.max_same_character_in_row` (2) | so oft hintereinander darf dieselbe Figur kommen (ohne `--characters`) |
+
+Bekannte Grenze: Eine Nebenfigur, die in der Staffel kaum vorkommt, kann Gesichtern von Figuren ohne AniList-Eintrag zugeordnet werden. Das sieht man in `characters` (viele Clips für eine kleine Rolle). Für die Hauptfiguren und `--characters` spielt das kaum eine Rolle.
 
 ## Tests
 

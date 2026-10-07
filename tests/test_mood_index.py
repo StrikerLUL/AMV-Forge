@@ -11,7 +11,7 @@ from backend.config import load_settings
 from backend.db import get_engine
 from backend.db.models import Clip
 from backend.indexer import index_season
-from backend.mood_index import MoodModels
+from backend.analysis.loader import ModelLoader
 from backend.sources.folder import scan_folder
 from tests.synth_video import BLUES, make_color_video
 
@@ -29,7 +29,7 @@ def test_failed_clip_download_is_retried_without_decoding_again(
         attempts.append(1)
         raise RuntimeError("Failed to download weights (kein Internet)")
 
-    monkeypatch.setattr("backend.mood_index.OpenClipModel", offline)
+    monkeypatch.setattr("backend.analysis.loader.OpenClipModel", offline)
     folder = tmp_path / "Testanime"
     folder.mkdir()
     make_color_video(folder / "Testanime - 01.mkv", BLUES[:3], moving=True)
@@ -37,7 +37,7 @@ def test_failed_clip_download_is_retried_without_decoding_again(
     engine = get_engine(tmp_path / "test.sqlite")
 
     first = index_season(scan_folder(folder, settings.index.video_extensions), settings, engine, None,
-                         models=MoodModels(settings, vad=None, dialog=None))
+                         models=ModelLoader(settings, vad=None, dialog=None))
     assert first.mood.visual == 1 and first.mood.mood
     assert "konnte nicht geladen werden" in caplog.text
     with Session(engine) as session:
@@ -45,6 +45,6 @@ def test_failed_clip_download_is_retried_without_decoding_again(
         assert clips and all(c.thumbnail and c.clip_tags is None and c.mood for c in clips)
 
     second = index_season(scan_folder(folder, settings.index.video_extensions), settings, engine, None,
-                          models=MoodModels(settings, vad=None, dialog=None))
+                          models=ModelLoader(settings, vad=None, dialog=None))
     assert len(attempts) == 2  # beim nächsten Lauf wird der Download erneut versucht ...
     assert not second.computed_anything  # ... aber die Folge nicht nochmal dekodiert

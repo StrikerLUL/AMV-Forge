@@ -12,7 +12,7 @@ from backend.config import load_settings
 from backend.db import get_engine
 from backend.db.models import Character, Clip, Episode, Season
 from backend.indexer import index_season, make_apis
-from backend.mood_index import MoodModels
+from backend.analysis.loader import ModelLoader
 from backend.sources.folder import scan_folder
 from tests.fake_apis import MAL_ID, S2_ID, FakeApis
 from tests.fake_models import FakeClip, FakeDialog, FakeVad
@@ -43,7 +43,7 @@ def test_index_twice_computes_nothing_the_second_time(tmp_path: Path, monkeypatc
     fake = FakeApis()
     source = scan_folder(folder, settings.index.video_extensions)
     fake_clip = FakeClip(settings.clip)
-    models = MoodModels(settings, clip=fake_clip, vad=FakeVad([(8.5, 10.0)]), dialog=FakeDialog())
+    models = ModelLoader(settings, clip=fake_clip, vad=FakeVad([(8.5, 10.0)]), dialog=FakeDialog())
 
     first = index_season(source, settings, engine, make_apis(engine, settings.apis, fake.transport), models=models)
     assert first.scenes_computed == 2 and first.skips_computed == 2 and first.motion_computed == 2
@@ -93,7 +93,7 @@ def test_index_twice_computes_nothing_the_second_time(tmp_path: Path, monkeypatc
         '    - "an anime sunset"', '    - "an anime sunset"\n    - "an anime beach"'), encoding="utf-8")
     tuned = replace(settings, clip=replace(settings.clip, prompts=prompts))
     third = index_season(scan_folder(folder, settings.index.video_extensions), tuned, engine, None,
-                         models=MoodModels(tuned, clip=fake_clip, vad=FakeVad([(8.5, 10.0)]), dialog=FakeDialog()))
+                         models=ModelLoader(tuned, clip=fake_clip, vad=FakeVad([(8.5, 10.0)]), dialog=FakeDialog()))
     assert (third.mood.visual, third.mood.tags, third.mood.audio, third.mood.subtitles) == (0, 2, 0, 0)
     assert third.mood.mood and fake_clip.images_seen == images
 

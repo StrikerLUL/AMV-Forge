@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from backend.analysis.video.keyframes import iter_keyframes, keyframe_times, load_jpeg, plan_frames, save_jpeg
+from backend.analysis.video.keyframes import iter_keyframes, keyframe_times, load_image, plan_frames, save_jpeg
 from backend.config import load_settings
 from tests.synth_video import REDS, make_color_video
 
@@ -58,7 +58,7 @@ def test_jpeg_round_trip_with_umlauts(tmp_path: Path) -> None:
     image[:, :, 0] = 200
     path = tmp_path / "Dieser Sommer ist sehr heiß" / "1.jpg"
     save_jpeg(image, path, 90)
-    back = load_jpeg(path)
+    back = load_image(path)
     assert back is not None and back.shape == image.shape
     assert abs(int(back[..., 0].mean()) - 200) < 5
-    assert load_jpeg(tmp_path / "fehlt.jpg") is None
+    assert load_image(tmp_path / "fehlt.jpg") is None

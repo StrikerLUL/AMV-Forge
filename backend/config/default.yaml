@@ -139,13 +139,16 @@ planner:
   pick_from_top: 8
   # Nicht öfter hintereinander Clips aus derselben Folge.
   max_same_episode_in_row: 2
+  # Nicht öfter hintereinander Clips mit derselben Figur (ab Phase 5, 0 = egal).
+  # Figuren, die du mit --characters ausdrücklich willst, zählen nicht.
+  max_same_character_in_row: 2
   # Score-Formel (Phase 4), Gewichte ohne --style. Jeder Stil in backend/styles/ überschreibt sie:
   # Score = mood*Stimmung + energy*(1 - |Bewegung - Song-Energie|) + character*Figuren
   #         + quality*Qualität - repeat*Wiederholung - dialog*Sprache im Clip
   weights:
     mood: 0.0        # passt die Stimmung des Clips zum Stil?
     energy: 1.0      # passt die Bewegung zur Energie des Songs an der Stelle (Drop = viel Bewegung)?
-    character: 0.0   # gewünschte Figuren im Bild (ab Phase 5)
+    character: 1.0   # wie sicher die Figuren aus --characters im Bild sind (ohne --characters egal)
     quality: 0.3     # Bildqualität 0-1
     repeat: 0.3      # Abzug, wenn die Folge in den letzten Clips schon oft dran war
     dialog: 0.0      # Abzug für Clips, in denen geredet wird (Mundbewegung ohne Ton wirkt komisch)
@@ -230,3 +233,47 @@ quality:
   prompt_threshold: 0.5
   # Clips mit weniger als 20 % der typischen Schärfe der Staffel (Median) gelten als verwackelt
   blurry_ratio: 0.2
+
+# ---------------------------------------------------------------- Phase 5: Charaktere
+
+faces:
+  # Anime-Gesichter finden: ein kleines YOLOv8-Modell, das auf Anime-Gesichter trainiert ist (ONNX-Datei).
+  # Es wird beim ersten Lauf von Hugging Face geladen und läuft mit onnxruntime.
+  enabled: true
+  repo: deepghs/anime_face_detection
+  model: face_detect_v1.4_s/model.onnx
+  # auto = GPU, wenn onnxruntime eine findet (CUDA oder DirectML), sonst CPU. Oder fest: cpu
+  device: auto
+  # Gesucht wird in denselben Standbildern wie bei CLIP, aber größer geholt (480 Pixel hoch)
+  height: 480
+  min_confidence: 0.35      # so sicher muss der Detektor sein (0-1)
+  iou: 0.5                  # Rahmen, die sich stärker überlappen, gelten als dasselbe Gesicht
+  min_size: 0.07            # kleinere Gesichter (Anteil der Bildhöhe) sind zum Wiedererkennen zu klein
+  max_per_frame: 6
+  # Ausschnitt zum Wiedererkennen: Gesicht mal 1,8, damit Haare und Frisur mit drauf sind
+  crop_scale: 1.8
+  # Pro Folge eine .npz-Datei mit Rahmen und CLIP-Embedding jedes Gesichts
+  cache_dir: data/cache/faces
+
+characters:
+  # Bilder der Figuren von AniList (einmal heruntergeladen)
+  image_dir: data/cache/characters
+  # Eigene Vorbilder, falls das AniList-Bild schlecht passt: Screenshots in data/characters/<Name>/
+  # (z. B. data/characters/Hori/1.png). Der Ordnername wird wie bei --characters gesucht.
+  extra_dir: data/characters
+  download_interval: 0.3    # Sekunden zwischen zwei Bild-Downloads
+  # Welche Figuren von AniList gesucht werden (MAIN, SUPPORTING, BACKGROUND)
+  roles: [MAIN, SUPPORTING]
+  # Wiedererkennen: Jedes Gesicht wird mit einem "Vorbild" pro Figur verglichen. Am Anfang ist das
+  # Vorbild das AniList-Bild. Danach wird es mehrmals verbessert: Die sichersten Treffer aus den
+  # Folgen werden gemittelt (so sieht die Figur in DIESEM Anime wirklich aus).
+  rounds: 3
+  seed_faces: 5             # so viele eindeutigste Treffer pro Figur in Runde 1 (wenige, dafür sicher richtig)
+  max_seed_faces: 300       # höchstens so viele in den späteren Runden
+  seed_probability: 0.8     # ab dieser Sicherheit zählt ein Treffer fürs Vorbild
+  reference_weight: 0.25    # so viel AniList-Bild bleibt im Vorbild (gegen Abdriften)
+  # Sicherheit (0,5-1): wie deutlich die ähnlichste Figur vor der zweitähnlichsten liegt.
+  # scale: wie stark ein kleiner Abstand schon zählt (größer = schneller sicher)
+  scale: 50
+  # Ab dieser Sicherheit gilt ein Gesicht als die Figur, sonst als "unbekannt"
+  min_probability: 0.6

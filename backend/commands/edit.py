@@ -12,6 +12,7 @@ from pathlib import Path
 
 from sqlmodel import Session, select
 
+from backend.analysis.character_names import pick_characters
 from backend.analysis.mood import MOODS, dominant, mood_match
 from backend.analysis.music.energy import mean_energy
 from backend.analysis.music.structure import SongAnalysis
@@ -22,9 +23,11 @@ from backend.commands.song import log_song
 from backend.config.settings import Settings
 from backend.config.styles import StyleProfile, available_styles, load_style
 from backend.db import get_engine
-from backend.db.models import Clip, Episode, Season
+from backend.character_index import season_characters
+from backend.db.models import Character, Clip, Episode, Season
 from backend.media import probe_duration, require_ffmpeg
 from backend.planner.assign import Assignment, Candidate, assign_to_beats, usable_scenes
+from backend.planner.scoring import character_tiers
 from backend.planner.slots import Slot, build_slots, choose_song_start
 from backend.planner.song_slots import build_song_slots, choose_edit_start, summarize
 from backend.render.ffmpeg_graph import RenderOptions, render_edit
@@ -63,6 +66,8 @@ def add_edit_commands(sub: argparse._SubParsersAction) -> None:  # type: ignore[
     edit.add_argument("--season", type=int, required=True, help="DB-ID der Staffel (zeigt 'status')")
     edit.add_argument("--style", choices=available_styles(), default=None,
                       help="Phase 4: Clips nach Stimmung wählen (backend/styles/<stil>.yaml)")
+    edit.add_argument("--characters", default=None,
+                      help='Phase 5: Szenen mit diesen Figuren, z. B. "Hori,Miyamura" (ein Teil des Namens reicht)')
     _add_common(edit, DATA_DIR / "renders" / "edit.mp4")
     edit.set_defaults(handler=run_edit)
 
@@ -100,6 +105,7 @@ def _finish(
     assignments: list[Assignment],
     seed: int,
     extra: dict[str, object],
+    names: dict[int, str] | None = None,
 ) -> Path:
     aligned = sum(1 for a in assignments if a.aligned)
     log.info("Bewegungs-Peak genau auf dem Beat: %d von %d Clips", aligned, len(assignments))
@@ -132,6 +138,7 @@ def _finish(
                 "mood": a.candidate.mood if a.candidate else None,
                 "quality": a.candidate.quality if a.candidate else None,
                 "speech": a.candidate.speech if a.candidate else None,
+                "characters": _named(a.candidate.characters, names) if a.candidate else None,
                 "score": a.score,
             }
             for a in assignments
@@ -140,6 +147,13 @@ def _finish(
     plan_file.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
     log.info("Schnittliste: %s", plan_file)
     return out
+
+
+def _named(found: dict[int, float] | None, names: dict[int, str] | None) -> dict[str, float] | None:
+    """{AniList-ID: Sicherheit} -> {Name: Sicherheit} für die Schnittliste."""
+    if found is None:
+        return None
+    return {(names or {}).get(k, str(k)): v for k, v in sorted(found.items(), key=lambda kv: -kv[1])}
 
 
 def _seed(args: argparse.Namespace) -> int:
@@ -180,7 +194,8 @@ def _index_hint(season: Season) -> str:
     return f"python -m backend.cli index --source jellyfin --season {season.source_id}"
 
 
-def _load_candidates(session: Session, season: Season, settings: Settings, need_mood: bool) -> list[Candidate]:
+def _load_candidates(session: Session, season: Season, settings: Settings, need_mood: bool,
+                     need_characters: bool = False) -> list[Candidate]:
     rows = session.exec(
         select(Clip, Episode).join(Episode, Clip.episode_id == Episode.id).where(Episode.season_id == season.id)
     ).all()
@@ -193,6 +208,8 @@ def _load_candidates(session: Session, season: Season, settings: Settings, need_
                          f"Einmal ausführen: {_index_hint(season)}")
     if need_mood and (season.mood_signature is None or any(clip.mood is None for clip, _ in rows)):
         raise ValueError(f"Die Stimmung der Clips fehlt noch (neu in Phase 4). Einmal ausführen: {_index_hint(season)}")
+    if need_characters and season.characters_signature is None:
+        raise ValueError(f"Die Figuren der Clips fehlen noch (neu in Phase 5). Einmal ausführen: {_index_hint(season)}")
 
     missing: set[int] = set()
     dropped: Counter[str] = Counter()
@@ -204,8 +221,10 @@ def _load_candidates(session: Session, season: Season, settings: Settings, need_
         if clip.quality is not None and clip.quality < settings.quality.min_score:
             dropped[clip.quality_issue or "niedrig"] += 1
             continue
+        found = {int(k): float(v) for k, v in clip.characters.items()} if clip.characters is not None else None
         candidates.append(Candidate(Path(ep.path), clip.start, clip.end, clip.motion, clip.motion_peak, ep.number,
-                                    clip_id=clip.id, mood=clip.mood, quality=clip.quality, speech=clip.speech))
+                                    clip_id=clip.id, mood=clip.mood, quality=clip.quality, speech=clip.speech,
+                                    characters=found))
     if missing:
         log.warning("Datei fehlt für Folge %s, deren Clips werden übersprungen", ", ".join(map(str, sorted(missing))))
     if dropped:
@@ -233,6 +252,55 @@ def _log_moods(assignments: list[Assignment], candidates: list[Candidate], style
                  overall)
 
 
+def _resolve_characters(session: Session, season: Season, settings: Settings, text: str) -> list[Character]:
+    """--characters "Hori,Miyamura" -> die passenden Figuren der Staffel (Teil des Namens reicht)."""
+    known = season_characters(session, season, settings.characters.roles)
+    if not known:
+        raise ValueError("Für diese Staffel sind keine Figuren von AniList gespeichert (Lauf mit --no-api?). "
+                         f"Einmal ausführen: {_index_hint(season)}")
+    return pick_characters(text, known)
+
+
+def _character_names(session: Session, season: Season) -> dict[int, str]:
+    return {c.anilist_id: c.name for c in session.exec(select(Character).where(Character.season_id == season.id))}
+
+
+def _log_available(candidates: list[Candidate], wanted: list[Character], slots: int) -> None:
+    ids = [c.anilist_id for c in wanted]
+    every, some = character_tiers(candidates, ids)
+    together = " + ".join(c.name for c in wanted)
+    if len(wanted) == 1:
+        log.info("Clips mit %s: %d von %d", together, len(every), len(candidates))
+    else:
+        log.info("Clips mit %s zusammen: %d, mit mindestens einer davon: %d (von %d)", together, len(every),
+                 len(some), len(candidates))
+    if len(every) < slots:
+        log.warning("Nur %d Clips mit %s für %d Schnitte: danach kommen %sWiederholungen", len(every), together,
+                    slots, "Clips mit einer davon, dann " if len(some) > len(every) else "")
+    unsearched = sum(1 for c in candidates if c.characters is None)
+    if unsearched:
+        log.warning("%d Clips ohne Gesichtersuche (Folge noch nicht fertig indexiert?)", unsearched)
+
+
+def _log_characters(assignments: list[Assignment], wanted: list[Character], names: dict[int, str]) -> None:
+    """Zeigt, wer im fertigen Edit zu sehen ist (zum Prüfen von --characters)."""
+    sets = [a.candidate.character_ids if a.candidate else frozenset() for a in assignments]
+    if wanted:
+        ids = {c.anilist_id for c in wanted}
+        parts = []
+        if len(wanted) > 1:
+            parts.append(f"{'beide' if len(wanted) == 2 else 'alle'} {sum(1 for s in sets if ids <= s)}")
+            parts += [f"nur {c.name} {sum(1 for s in sets if s & ids == {c.anilist_id})}" for c in wanted]
+        else:
+            parts.append(f"mit {wanted[0].name} {sum(1 for s in sets if ids <= s)}")
+        parts.append(f"ohne {sum(1 for s in sets if not s & ids)}")
+        log.info("Figuren im Edit (%d Clips): %s", len(sets), ", ".join(parts))
+        return
+    counts = Counter(k for s in sets for k in s)
+    if counts:
+        log.info("Figuren im Edit: %s", ", ".join(f"{names.get(k, k)} {n}" for k, n in counts.most_common(6)))
+
+
 def run_edit(args: argparse.Namespace, settings: Settings) -> Path:
     require_ffmpeg()
     style = load_style(args.style, settings.planner.weights) if args.style else None
@@ -241,7 +309,10 @@ def run_edit(args: argparse.Namespace, settings: Settings) -> Path:
         season = session.get(Season, args.season)
         if season is None:
             raise ValueError(f"Keine Staffel mit DB-ID {args.season}. 'status' zeigt alle.")
-        candidates = _load_candidates(session, season, settings, need_mood=style is not None)
+        wanted = _resolve_characters(session, season, settings, args.characters) if args.characters else []
+        candidates = _load_candidates(session, season, settings, need_mood=style is not None,
+                                      need_characters=bool(wanted))
+        names = _character_names(session, season)
         title = season.anilist_title or season.title
     log.info("%s: %d Clips aus %d Folgen", title, len(candidates), len({c.episode for c in candidates}))
     if style is not None:
@@ -252,6 +323,8 @@ def run_edit(args: argparse.Namespace, settings: Settings) -> Path:
     log_song(song)
     song_start, slots = plan_slots(args, settings, song)
     _log_plan(song, song_start, slots, args.length)
+    if wanted:
+        _log_available(candidates, wanted, len(slots))
 
     seed = _seed(args)
     p = settings.planner
@@ -263,9 +336,13 @@ def run_edit(args: argparse.Namespace, settings: Settings) -> Path:
         target=style.mood if style else None,
         pool_share=style.pool if style else 1.0,
         repeat_window=p.repeat_window,
+        characters=[c.anilist_id for c in wanted],
+        max_same_character_in_row=p.max_same_character_in_row,
     )
     episodes = [a.episode for a in assignments]
     log.info("Folgen im Edit: %s", ", ".join(f"{n}x Folge {e}" for e, n in
                                              sorted({e: episodes.count(e) for e in episodes}.items())))
     _log_moods(assignments, candidates, style)
-    return _finish(args, settings, song, song_start, assignments, seed, {"season": args.season, "title": title})
+    _log_characters(assignments, wanted, names)
+    extra: dict[str, object] = {"season": args.season, "title": title, "characters": [c.name for c in wanted]}
+    return _finish(args, settings, song, song_start, assignments, seed, extra, names)

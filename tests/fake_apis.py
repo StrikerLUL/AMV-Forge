@@ -34,9 +34,10 @@ def _media(anilist_id: int, mal_id: int, title: str, sequel: int | None) -> dict
 class FakeApis:
     """Ein httpx-Transport, der AniList, Jikan und AniSkip spielt und Anfragen zählt."""
 
-    def __init__(self) -> None:
+    def __init__(self, images: dict[str, bytes] | None = None) -> None:
         self.calls: list[str] = []
         self.urls: list[str] = []
+        self.images = images or {}  # Bilder der Figuren (Host "x", z. B. "/h.png")
         self.transport = httpx.MockTransport(self.handle)
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -68,4 +69,6 @@ class FakeApis:
                 ]
                 return httpx.Response(200, json={"found": True, "results": results})
             return httpx.Response(404, json={"found": False, "results": []})
+        if host == "x" and path in self.images:
+            return httpx.Response(200, content=self.images[path], headers={"Content-Type": "image/png"})
         return httpx.Response(500)
