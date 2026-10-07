@@ -1,0 +1,43 @@
+# Stil "Story": die Staffel in ihrer Reihenfolge erzählen, Plot-Momente.
+
+description: Chronologisch durch die Staffel, Plot-Momente
+
+# Kein bpm: passt zu jedem Song
+# Die Schnitte folgen den Song-Abschnitten: ruhig in Intro und Verse, dichter im Refrain
+cuts:
+  beats_per_cut: {intro: 4, verse: 4, chorus: 2, bridge: 4, outro: 4}
+  drop: 1
+  buildup_bars: 2
+  buildup_from: 4
+  buildup_to: 2
+
+# Gemischt: harte Schnitte, Überblendung beim Wechsel des Abschnitts, Flash im Drop
+transitions:
+  default: cut
+  section: crossfade
+  drop: flash
+  beats: 1
+
+effects:
+  look: film
+
+# Die Clips kommen in der Reihenfolge der Staffel (Folge 1 vorne, die letzte Folge hinten)
+order: chronological
+
+# Starke Momente jeder Art, nur keine ruhigen Füllszenen
+mood:
+  romance: 0.5
+  action: 0.5
+  sad: 0.5
+  funny: 0.3
+  calm: -0.3
+
+pool: 0.5
+
+weights:
+  mood: 1.0
+  energy: 0.3
+  quality: 0.4
+  repeat: 0.0      # in der Reihenfolge der Staffel kommen natürlich mehrere Clips aus derselben Folge
+  overuse: 0.0
+  dialog: 0.0

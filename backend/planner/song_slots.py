@@ -8,7 +8,8 @@ halbe Beats erlaubt, die Zeit dafür liegt genau in der Mitte zwischen zwei Beat
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Any
 
 from backend.analysis.music.energy import mean_energy
 from backend.analysis.music.structure import SongAnalysis
@@ -139,8 +140,9 @@ def build_song_slots(
     while True:
         k = int(math.floor(pos + EPS))
         step = zones[k].beats_per_cut
-        if step < 1 and k + 1 < len(beats) and (beats[k + 1] - beats[k]) * step < cfg.min_cut_seconds:
-            step = 1.0
+        # Zu schnell für den Song (z. B. halbe Beats bei 180 BPM): Schnittrate halbieren, bis es passt
+        while step < 1 and k + 1 < len(beats) and (beats[k + 1] - beats[k]) * step < cfg.min_cut_seconds:
+            step *= 2
         nxt = min(pos + step, float(next_change[k]))
         if nxt > len(beats) - 1 + EPS or _beat_time(beats, nxt) >= song_end - min_slot_seconds:
             break
@@ -171,6 +173,33 @@ def build_song_slots(
             )
         )
     return slots
+
+
+def tempo_factor(bpm: float, wanted: tuple[float, float] | None) -> float:
+    """Phase 6: Passt der Song nicht zum Tempo des Stils, wird im halben oder doppelten Tempo gezählt.
+
+    Gibt den Faktor für die Schnittraten zurück: 2 = halbes Tempo (ein 150-BPM-Song für Romance mit 70-100 BPM
+    wird wie 75 BPM geschnitten, also doppelt so viele Beats pro Clip), 0.5 = doppeltes Tempo, 1 = wie er ist.
+    """
+    if wanted is None or bpm <= 0:
+        return 1.0
+    low, high = wanted
+
+    def distance(tempo: float) -> float:  # 1 = im Bereich, 1.2 = 20 % daneben
+        return low / tempo if tempo < low else (tempo / high if tempo > high else 1.0)
+
+    return min((1.0, 2.0, 0.5), key=lambda f: (round(distance(bpm / f), 6), abs(math.log2(f))))
+
+
+def style_cuts(cfg: CutSettings, overrides: dict[str, Any], factor: float = 1.0) -> CutSettings:
+    """Schnittraten aus default.yaml, überschrieben vom Stil (cuts: in backend/styles/*.yaml), mal Tempo-Faktor."""
+    merged = replace(cfg, **{k: v for k, v in overrides.items() if k != "beats_per_cut"},
+                     beats_per_cut={**cfg.beats_per_cut, **overrides.get("beats_per_cut", {})})
+    if factor == 1.0:
+        return merged
+    return replace(merged, beats_per_cut={k: v * factor for k, v in merged.beats_per_cut.items()},
+                   drop=merged.drop * factor, buildup_from=merged.buildup_from * factor,
+                   buildup_to=merged.buildup_to * factor)
 
 
 def summarize(slots: list[Slot]) -> list[tuple[str, int, float]]:

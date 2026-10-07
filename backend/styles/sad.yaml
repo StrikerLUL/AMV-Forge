@@ -1,8 +1,27 @@
 # Stil "Sad": Weinen, Abschied, Regen, Einsamkeit.
-# Phase 4 nutzt nur mood, pool und weights. BPM-Bereich, Schnittrate, Übergänge und Effekte
-# kommen in Phase 6 dazu.
 
 description: Weinen, Abschied, Regen
+
+bpm: [60, 90]
+
+# 1 Clip pro 4-8 Beats
+cuts:
+  beats_per_cut: {intro: 8, verse: 4, chorus: 4, bridge: 8, outro: 8}
+  drop: 4
+  buildup_bars: 0
+
+# Langsame Überblendungen, beim Wechsel des Abschnitts über Schwarz
+transitions:
+  default: crossfade
+  section: fade_black
+  drop: fade_black
+  beats: 1.5
+
+effects:
+  look: cold                                # entsättigt, kühl
+  vignette: 0.5
+  slowmo: {speed: 0.75, min_seconds: 1.5}
+  push_in: {zoom: 0.04, min_seconds: 2.0}
 
 mood:
   sad: 1.0

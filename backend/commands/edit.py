@@ -16,6 +16,7 @@ from backend.analysis.character_names import pick_characters
 from backend.analysis.mood import MOODS, dominant, mood_match
 from backend.analysis.music.energy import mean_energy
 from backend.analysis.music.structure import SongAnalysis
+from backend.analysis.video.faces import ClipFace
 from backend.analysis.video.motion import clip_motion, measure_motion
 from backend.analysis.video.scenes import detect_scenes
 from backend.commands.common import existing_file, fmt_time
@@ -25,13 +26,17 @@ from backend.config.styles import StyleProfile, available_styles, load_style
 from backend.db import get_engine
 from backend.character_index import season_characters
 from backend.db.models import Character, Clip, Episode, Season
-from backend.media import probe_duration, require_ffmpeg
+from backend.media import probe_duration, probe_video_size, require_ffmpeg
 from backend.planner.assign import Assignment, Candidate, assign_to_beats, usable_scenes
 from backend.planner.scoring import character_tiers
 from backend.planner.slots import Slot, build_slots, choose_song_start
-from backend.planner.song_slots import build_song_slots, choose_edit_start, summarize
+from backend.planner.song_slots import build_song_slots, choose_edit_start, style_cuts, summarize, tempo_factor
 from backend.planner.spread import densest_stretch
-from backend.render.ffmpeg_graph import RenderOptions, render_edit
+from backend.render.effects import NO_FX, ClipFx, plan_effects, prepare_slots
+from backend.render.ffmpeg_graph import Look, RenderOptions, Shot, frame_counts, render_edit
+from backend.render.looks import resolve_look
+from backend.render.reframe import Framing, centered, frame_shot, reframe_sheet
+from backend.render.reframe import summarize as summarize_framing
 from backend.songs import load_song
 
 log = logging.getLogger("amv_forge")
@@ -54,6 +59,8 @@ def _add_common(parser: argparse.ArgumentParser, default_out: Path) -> None:
     parser.add_argument("--seed", type=int, default=None, help="Zufalls-Seed für reproduzierbare Edits")
     parser.add_argument("--preview", action="store_true", help="Schnelle 480p-Vorschau statt 1080x1920")
     parser.add_argument("--no-music", action="store_true", help="Ohne eingebrannte Musik exportieren (für TikTok-Sounds)")
+    parser.add_argument("--center", action="store_true",
+                        help="9:16 immer aus der Mitte schneiden wie bis Phase 5 (ohne Smart Reframe)")
     parser.add_argument("--config", type=Path, default=None, help="Eigene YAML statt backend/config/default.yaml")
 
 
@@ -66,15 +73,26 @@ def add_edit_commands(sub: argparse._SubParsersAction) -> None:  # type: ignore[
     edit = sub.add_parser("edit", help="Edit aus einer indexierten Staffel (siehe 'index' und 'status')")
     edit.add_argument("--season", type=int, required=True, help="DB-ID der Staffel (zeigt 'status')")
     edit.add_argument("--style", choices=available_styles(), default=None,
-                      help="Phase 4: Clips nach Stimmung wählen (backend/styles/<stil>.yaml)")
+                      help="Clips nach Stimmung wählen (Phase 4), Schnittrate, Übergänge und Effekte des Stils "
+                           "(Phase 6), siehe backend/styles/<stil>.yaml")
+    edit.add_argument("--no-effects", action="store_true",
+                      help="Mit --style: Clips und Schnittrate wie im Stil, aber ohne Übergänge, Effekte und Farblook")
     edit.add_argument("--characters", default=None,
                       help='Phase 5: Szenen mit diesen Figuren, z. B. "Hori,Miyamura" (ein Teil des Namens reicht)')
     _add_common(edit, DATA_DIR / "renders" / "edit.mp4")
     edit.set_defaults(handler=run_edit)
 
 
-def plan_slots(args: argparse.Namespace, settings: Settings, song: SongAnalysis) -> tuple[float, list[Slot]]:
-    """Song-Ausschnitt und Schnittpunkte: nach Song-Struktur oder (mit --uniform) gleichmäßig."""
+def _effects_on(args: argparse.Namespace, style: StyleProfile | None) -> bool:
+    return style is not None and not getattr(args, "no_effects", False)
+
+
+def plan_slots(args: argparse.Namespace, settings: Settings, song: SongAnalysis,
+               style: StyleProfile | None = None) -> tuple[float, list[Slot], float]:
+    """Song-Ausschnitt und Schnittpunkte: nach Song-Struktur (mit Stil: dessen Schnittrate) oder gleichmäßig.
+
+    Gibt auch den Tempo-Faktor zurück (2 = im halben Tempo gezählt, siehe tempo_factor).
+    """
     if args.uniform or args.beats_per_cut:
         every = args.beats_per_cut or settings.quick.beats_per_cut
         start = choose_song_start(song.beats, song.duration, args.length, args.song_start)
@@ -83,9 +101,22 @@ def plan_slots(args: argparse.Namespace, settings: Settings, song: SongAnalysis)
         slots = [replace(s, intensity=round(mean_energy(song.energy, song.energy_rate, start + s.start,
                                                         start + s.end), 3)) for s in slots]
         log.info("Gleichmäßiger Schnitt: alle %d Beats", every)
-        return start, slots
-    start = choose_edit_start(song, args.length, args.song_start, settings.cuts.drop_position)
-    return start, build_song_slots(song, start, args.length, settings.cuts, settings.quick.min_slot_seconds)
+        return start, slots, 1.0
+    cuts, factor = settings.cuts, 1.0
+    if style is not None:
+        factor = tempo_factor(song.bpm, style.bpm)
+        cuts = style_cuts(settings.cuts, style.cuts, factor)
+        if style.bpm is not None:
+            low, high = style.bpm
+            how = {2.0: "im halben Tempo gezählt", 0.5: "im doppelten Tempo gezählt"}.get(factor, "wie er ist")
+            log.info("Stil %s ist für %.0f-%.0f BPM gemacht, der Song hat %.0f BPM: Schnittrate %s%s", style.name,
+                     low, high, song.bpm, how, f" (wie {song.bpm / factor:.0f} BPM)" if factor != 1.0 else "")
+    start = choose_edit_start(song, args.length, args.song_start, cuts.drop_position)
+    slots = build_song_slots(song, start, args.length, cuts, settings.quick.min_slot_seconds)
+    if _effects_on(args, style):
+        assert style is not None
+        slots = prepare_slots(slots, style.effects)  # Slow-Mo und Speed-Ramps brauchen weniger/mehr vom Clip
+    return start, slots, factor
 
 
 def _log_plan(song: SongAnalysis, start: float, slots: list[Slot], length: float) -> None:
@@ -98,6 +129,48 @@ def _log_plan(song: SongAnalysis, start: float, slots: list[Slot], length: float
         log.info("  %-8s %3d Clips, im Schnitt %.2f s lang", label or "gleich", count, avg)
 
 
+def _framings(args: argparse.Namespace, settings: Settings, assignments: list[Assignment],
+              wanted: frozenset[int]) -> list[Framing]:
+    """Wo der 9:16-Ausschnitt in jedem Clip liegt (Smart Reframe, Phase 6)."""
+    aspects: dict[Path, float] = {}
+    result = []
+    for a in assignments:
+        assert a.video is not None
+        if a.video not in aspects:
+            width, height = probe_video_size(a.video)
+            aspects[a.video] = width / height
+        if args.center or settings.reframe.mode == "center":
+            result.append(centered(aspects[a.video]))
+        else:
+            result.append(frame_shot(a, aspects[a.video], wanted, settings.reframe, settings.motion))
+    stats = summarize_framing(result)
+    names = {"face": "Gesichter", "pan": "Schwenk", "main": "Hauptgesicht", "fit": "ganzes Bild",
+             "motion": "Bewegung", "center": "Mitte"}
+    log.info("Reframe 9:16 (Clips): %s", ", ".join(f"{names.get(m, m)} {n}" for m, n in
+                                                   sorted(stats.modes.items(), key=lambda kv: -kv[1])))
+    if stats.faces:
+        log.info("Gesichter ganz im 9:16-Bild: %d von %d (%.0f %%), aus der Mitte geschnitten wären es %d (%.0f %%)",
+                 stats.inside, stats.faces, 100 * stats.inside / stats.faces, stats.center_inside,
+                 100 * stats.center_inside / stats.faces)
+        log.info("Wichtigstes Gesicht ganz im Bild: in %d von %d Clips mit Gesichtern", stats.main_inside,
+                 stats.clips_with_faces)
+    return result
+
+
+def _log_effects(fxs: list[ClipFx], look: Look, style: StyleProfile) -> None:
+    kinds = Counter(fx.into.kind for fx in fxs[1:])
+    log.info("Übergänge (%s): %s", style.name, ", ".join(f"{k} {n}" for k, n in kinds.most_common()) or "keine")
+    effects = Counter(label.split(" ")[0] for fx in fxs for label in fx.labels())
+    parts = [f"{k} {n}" for k, n in effects.most_common()]
+    if look.lut is not None:
+        parts.append(f"Look {style.effects.look}")
+    if look.glow:
+        parts.append(f"Glow {look.glow:g}")
+    if look.vignette:
+        parts.append(f"Vignette {look.vignette:g}")
+    log.info("Effekte: %s", ", ".join(parts) or "keine")
+
+
 def _finish(
     args: argparse.Namespace,
     settings: Settings,
@@ -107,6 +180,9 @@ def _finish(
     seed: int,
     extra: dict[str, object],
     names: dict[int, str] | None = None,
+    style: StyleProfile | None = None,
+    factor: float = 1.0,
+    wanted: frozenset[int] = frozenset(),
 ) -> Path:
     aligned = sum(1 for a in assignments if a.aligned)
     log.info("Bewegungs-Peak genau auf dem Beat: %d von %d Clips", aligned, len(assignments))
@@ -114,9 +190,24 @@ def _finish(
 
     r = settings.render
     width, height = (r.preview_width, r.preview_height) if args.preview else (r.width, r.height)
+    framings = _framings(args, settings, assignments, wanted)
+    counts = frame_counts(assignments, r.fps)
+    look = Look()
+    fxs = [NO_FX] * len(assignments)
+    if _effects_on(args, style):
+        assert style is not None
+        downbeats = [d - song_start for d in song.downbeats if song_start - 0.05 <= d < song_start + args.length]
+        fxs = plan_effects(assignments, counts, style.transitions, style.effects, downbeats,
+                           song.beat_seconds * factor, r.fps, settings.fx)
+        look = Look(resolve_look(style.effects.look, settings.fx), style.effects.glow, style.effects.vignette)
+        _log_effects(fxs, look, style)
     opts = RenderOptions(width=width, height=height, fps=r.fps, crf=r.crf, preset=r.preset,
-                         audio_bitrate=r.audio_bitrate, with_music=not args.no_music)
-    out = render_edit(assignments, args.song, song_start, args.out, opts)
+                         audio_bitrate=r.audio_bitrate, with_music=not args.no_music, look=look, fx=settings.fx)
+    shots = [Shot(a, f, fx) for a, f, fx in zip(assignments, framings, fxs)]
+    out = render_edit(shots, args.song, song_start, args.out, opts)
+    if settings.reframe.sheet:
+        sheet = reframe_sheet(assignments, framings, out.with_suffix(".reframe.jpg"))
+        log.info("Kontaktbogen Reframe: %s", sheet)
 
     plan_file = out.with_suffix(".plan.json")
     plan = {
@@ -127,6 +218,8 @@ def _finish(
         "song_start": song_start,
         "seed": seed,
         "style": getattr(args, "style", None),
+        "tempo_factor": factor,
+        "look": style.effects.look if _effects_on(args, style) and style is not None else None,
         "sections": [asdict(s) for s in song.sections],
         "drops": [asdict(d) for d in song.drops],
         "clips": [
@@ -144,8 +237,13 @@ def _finish(
                 "score": a.score,
                 # So viele Clips des Edits kamen bei der Wahl aus derselben Stelle der Folge (Streuung)
                 "crowd": a.crowd,
+                # Ab Phase 6: Übergang am Anfang des Clips, Effekte, Tempo, 9:16-Ausschnitt
+                "transition": fx.into.kind,
+                "effects": fx.labels(),
+                "framing": {"mode": framing.mode, "x": [round(x, 3) for _, x in framing.keys],
+                            "faces": framing.faces, "inside": framing.inside, "main_inside": framing.main_inside},
             }
-            for a in assignments
+            for a, fx, framing in zip(assignments, fxs, framings)
         ],
     }
     plan_file.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -182,7 +280,7 @@ def run_quick(args: argparse.Namespace, settings: Settings) -> Path:
     engine = get_engine(settings.database.path)
     song = load_song(engine, args.song, settings.music, args.analyzer)
     log_song(song)
-    song_start, slots = plan_slots(args, settings, song)
+    song_start, slots, _ = plan_slots(args, settings, song)
     _log_plan(song, song_start, slots, args.length)
 
     video_duration = probe_duration(args.video)
@@ -240,7 +338,7 @@ def _load_candidates(session: Session, season: Season, settings: Settings, need_
         found = {int(k): float(v) for k, v in clip.characters.items()} if clip.characters is not None else None
         candidates.append(Candidate(Path(ep.path), clip.start, clip.end, clip.motion, clip.motion_peak, ep.number,
                                     clip_id=clip.id, mood=clip.mood, quality=clip.quality, speech=clip.speech,
-                                    characters=found))
+                                    characters=found, faces=ClipFace.from_db(clip.faces)))
     if missing:
         log.warning("Datei fehlt für Folge %s, deren Clips werden übersprungen", ", ".join(map(str, sorted(missing))))
     if dropped:
@@ -337,7 +435,7 @@ def run_edit(args: argparse.Namespace, settings: Settings) -> Path:
 
     song = load_song(engine, args.song, settings.music, args.analyzer)
     log_song(song)
-    song_start, slots = plan_slots(args, settings, song)
+    song_start, slots, factor = plan_slots(args, settings, song, style)
     _log_plan(song, song_start, slots, args.length)
     if wanted:
         _log_available(candidates, wanted, len(slots))
@@ -356,6 +454,7 @@ def run_edit(args: argparse.Namespace, settings: Settings) -> Path:
         max_same_character_in_row=p.max_same_character_in_row,
         spread_max_clips=p.spread_max_clips,
         spread_window=p.spread_window_seconds,
+        chronological=style is not None and style.order == "chronological",
     )
     episodes = [a.episode for a in assignments]
     log.info("Folgen im Edit: %s", ", ".join(f"{n}x Folge {e}" for e, n in
@@ -363,4 +462,5 @@ def run_edit(args: argparse.Namespace, settings: Settings) -> Path:
     _log_moods(assignments, candidates, style)
     _log_characters(assignments, wanted, names)
     extra: dict[str, object] = {"season": args.season, "title": title, "characters": [c.name for c in wanted]}
-    return _finish(args, settings, song, song_start, assignments, seed, extra, names)
+    return _finish(args, settings, song, song_start, assignments, seed, extra, names, style, factor,
+                   frozenset(c.anilist_id for c in wanted))

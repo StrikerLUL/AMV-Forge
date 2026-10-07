@@ -133,6 +133,20 @@ def test_characters_command_and_edit_with_both(horimiya: Path, synth_song: Path)
     assert len({c["clip_id"] for c in together}) == pairs  # jede Szene mit beiden ist dabei
     assert all(c["characters"] for c in plan["clips"])  # keine Szene ganz ohne die beiden
 
+    # Phase 6: Hori steht links, Miyamura rechts, aus der Mitte geschnitten wäre keiner der beiden ganz im Bild.
+    # Smart Reframe: das wichtigste Gesicht ist in jedem Clip ganz drin. Beide zusammen passen nicht ins
+    # 9:16-Bild, in kurzen Clips (unter reframe.pan_min_seconds) gibt es dafür keinen Schwenk.
+    framings = [c["framing"] for c in plan["clips"]]
+    assert all(f["faces"] and f["main_inside"] for f in framings)
+    assert {f["mode"] for f in framings} <= {"face", "pan", "main"}
+    assert sum(f["inside"] for f in framings) >= 0.5 * sum(f["faces"] for f in framings)
+    assert out.with_suffix(".reframe.jpg").is_file()
+    centered = renders / "mitte.mp4"
+    assert main(["edit", "--season", "1", "--song", str(synth_song), "--length", "8", "--preview", "--seed", "3",
+                 "--characters", "Hori,Miyamura", "--analyzer", "librosa", "--center", "--out", str(centered)]) == 0
+    middle = json.loads(centered.with_suffix(".plan.json").read_text(encoding="utf-8"))
+    assert {c["framing"]["mode"] for c in middle["clips"]} == {"center"}
+
 
 def test_edit_with_characters_needs_the_phase_5_index(horimiya: Path, synth_song: Path) -> None:
     config = Path("light.yaml")

@@ -241,6 +241,32 @@ class CharacterSettings:
 
 
 @dataclass(frozen=True)
+class ReframeSettings:
+    mode: str  # smart oder center
+    margin: float
+    min_face_share: float
+    too_wide: str  # pan, main oder fit
+    pan_min_seconds: float
+    motion_min: float
+    sheet: bool
+
+
+@dataclass(frozen=True)
+class FxSettings:
+    flash_seconds: float
+    whip_seconds: float
+    whip_blur: float
+    max_transition_share: float
+    punch_seconds: float
+    shake_speed: float
+    freeze_min_seconds: float
+    glow_blur: float
+    looks: dict[str, dict[str, float]]  # Name -> Parameter (warmth, tint, saturation, contrast, brightness, lift)
+    lut_size: int
+    cache_dir: Path
+
+
+@dataclass(frozen=True)
 class Settings:
     quick: QuickSettings
     scenes: SceneSettings
@@ -261,6 +287,8 @@ class Settings:
     quality: QualitySettings
     faces: FaceSettings
     characters: CharacterSettings
+    reframe: ReframeSettings
+    fx: FxSettings
 
 
 def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -322,4 +350,20 @@ def load_settings(path: Path | None = None) -> Settings:
             "extra_dir": Path(chars["extra_dir"]),
             "roles": tuple(str(r).upper() for r in chars["roles"]),
         }),
+        reframe=_reframe(raw["reframe"]),
+        fx=FxSettings(**{
+            **raw["fx"],
+            "looks": {str(name): {str(k): float(v) for k, v in (params or {}).items()}
+                      for name, params in (raw["fx"]["looks"] or {}).items()},
+            "cache_dir": Path(raw["fx"]["cache_dir"]),
+        }),
     )
+
+
+def _reframe(raw: dict[str, Any]) -> ReframeSettings:
+    cfg = ReframeSettings(**raw)
+    if cfg.mode not in ("smart", "center"):
+        raise ValueError(f"reframe.mode muss smart oder center sein, ist {cfg.mode}")
+    if cfg.too_wide not in ("pan", "main", "fit"):
+        raise ValueError(f"reframe.too_wide muss pan, main oder fit sein, ist {cfg.too_wide}")
+    return cfg

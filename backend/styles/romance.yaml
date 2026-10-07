@@ -1,8 +1,33 @@
 # Stil "Romance": ruhige Paar-Szenen, Blicke, Erröten, Sonnenuntergang.
-# Phase 4 nutzt nur mood, pool und weights. BPM-Bereich, Schnittrate, Übergänge und Effekte
-# kommen in Phase 6 dazu.
 
 description: Ruhige Paar-Szenen, Blicke, Erröten
+
+# Für dieses Tempo sind die Schnittraten gedacht. Ein schnellerer Song (z. B. 150 BPM) wird im halben Tempo
+# gezählt (wie 75 BPM), also mit doppelt so vielen Beats pro Clip. Ein langsamerer im doppelten.
+bpm: [70, 100]
+
+# Schnittrate: alle wie viele Beats ein neuer Clip kommt (überschreibt cuts: in default.yaml).
+# Romance: 1 Clip pro 2-4 Beats, im Refrain länger.
+cuts:
+  beats_per_cut: {intro: 4, verse: 2, chorus: 4, bridge: 4, outro: 4}
+  drop: 2            # auch im Drop ruhig bleiben
+  buildup_bars: 0    # kein Build-up mit immer dichteren Schnitten
+
+# Übergänge (cut, flash, crossfade, dip_white, fade_black, whip):
+#   default = normaler Schnitt, downbeat = Schnitt auf einem Taktanfang, section = Wechsel des Abschnitts
+#   (Verse -> Chorus ...), drop = erster Schnitt im Drop. Die Mitte jedes Übergangs liegt auf dem Beat.
+transitions:
+  default: crossfade
+  section: dip_white
+  drop: dip_white
+  beats: 0.75        # Länge von Crossfade und Dip in Beats (höchstens die Hälfte des kürzeren Clips)
+
+# Effekte. zones = nur in diesen Abschnitten (fehlt = überall), min_seconds = nur in Clips ab dieser Länge.
+effects:
+  look: warm                                # Farblook aus fx.looks in default.yaml oder eigene .cube-Datei
+  glow: 0.3                                 # Soft Glow, 0-1
+  slowmo: {speed: 0.8, min_seconds: 1.0}    # leichtes Slow-Mo
+  push_in: {zoom: 0.05, min_seconds: 1.5}   # langsam ans Gesicht ranzoomen
 
 # Ziel-Stimmung: positiv = erwünscht, negativ = unerwünscht (je -1 bis 1)
 mood:

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from backend.planner.assign import Candidate, align_start, assign_to_beats
-from backend.planner.slots import Slot
+from backend.planner.slots import Slot, Timing
 
 VIDEO = Path("folge.mkv")
 
@@ -87,3 +87,45 @@ def test_same_seed_same_edit() -> None:
 def test_no_candidates_raises() -> None:
     with pytest.raises(ValueError):
         assign_to_beats([Slot(0, 1)], [], random.Random(0))
+
+
+def test_slow_motion_keeps_the_peak_on_the_beat() -> None:
+    """Phase 6: In halber Geschwindigkeit braucht ein 2-s-Slot nur 1 s der Szene, der Peak liegt trotzdem
+    genau auf einem Beat (hier dem zweiten, 1 s nach dem Schnitt)."""
+    slot = Slot(0.0, 2.0, hits=(0.0, 1.0), timing=Timing(((1.0, 0.5),)))
+    assert slot.source_duration == pytest.approx(1.0)
+    cand = Candidate(VIDEO, 10.0, 11.5, motion=1.0, peak=10.9)
+    start, aligned = align_start(cand, slot)
+    assert aligned and start == pytest.approx(10.4)
+    assert slot.timing.edit_offset(cand.peak - start, slot.duration) == pytest.approx(1.0)
+    (a,) = assign_to_beats([slot], [cand], random.Random(0))  # 1,5 s Szene reicht für den 2-s-Slot
+    assert a.aligned and a.source_end <= cand.end + 1e-9
+
+
+def test_speed_ramp_timing_round_trip() -> None:
+    timing = Timing(((0.4, 0.5), (1.0, 1.6)))
+    assert timing.source_offset(2.0, 2.0) == pytest.approx(0.8 * 0.5 + 1.2 * 1.6)
+    for t in (0.0, 0.3, 0.8, 1.2, 2.0):
+        assert timing.edit_offset(timing.source_offset(t, 2.0), 2.0) == pytest.approx(t)
+
+
+def test_story_order_runs_through_the_season() -> None:
+    clips = [Candidate(Path(f"folge{e}.mkv"), i * 5.0, i * 5.0 + 4.0, motion=float(i), peak=i * 5.0 + 1.0, episode=e)
+             for e in (1, 2, 3) for i in range(10)]
+    random.Random(4).shuffle(clips)
+    slots = [Slot(i * 1.0, i * 1.0 + 1.0, intensity=0.5) for i in range(12)]
+    result = assign_to_beats(slots, clips, random.Random(2), chronological=True)
+    order = [(a.episode, a.source_start) for a in result]
+    assert order == sorted(order)  # immer vorwärts durch die Staffel
+    assert len({a.episode for a in result}) >= 2
+
+
+def test_story_order_leaves_room_for_the_last_slots() -> None:
+    """Kaum mehr Clips als Slots: das Edit darf nicht vorzeitig ans Ende der Staffel springen und dann zurück."""
+    clips = [Candidate(VIDEO, i * 5.0, i * 5.0 + 4.0, motion=float(i % 4), peak=i * 5.0 + 1.0, episode=1 + i // 7)
+             for i in range(14)]
+    slots = [Slot(i * 1.0, i * 1.0 + 1.0, intensity=1.0) for i in range(12)]
+    for seed in range(5):
+        result = assign_to_beats(slots, clips, random.Random(seed), chronological=True)
+        order = [(a.episode, a.source_start) for a in result]
+        assert order == sorted(order) and len(set(order)) == 12

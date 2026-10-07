@@ -7,6 +7,56 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class Timing:
+    """Wie schnell der Clip in einem Slot läuft (Phase 6: Slow-Mo und Speed-Ramps).
+
+    pieces: (bis zu welchem Anteil des Slots, Tempo), z. B. ((1.0, 0.8),) = ganzer Slot in 0,8-facher
+    Geschwindigkeit, ((0.4, 0.5), (1.0, 1.6)) = erst Zeitlupe, dann schneller. Vor dem Slot (Übergänge)
+    gilt das erste Tempo, danach das letzte.
+    """
+
+    pieces: tuple[tuple[float, float], ...] = ((1.0, 1.0),)
+
+    @property
+    def is_normal(self) -> bool:
+        return all(abs(speed - 1.0) < 1e-9 for _, speed in self.pieces)
+
+    def _breaks(self, duration: float) -> list[tuple[float, float, float]]:
+        """(Edit-Zeit, Clip-Zeit, Tempo) am Anfang jedes Stücks, Zeiten ab Slot-Anfang."""
+        result: list[tuple[float, float, float]] = []
+        t = s = 0.0
+        for end, speed in self.pieces:
+            result.append((t, s, speed))
+            t_end = end * duration
+            s += (t_end - t) * speed
+            t = t_end
+        return result
+
+    def source_offset(self, t: float, duration: float) -> float:
+        """So viele Sekunden des Clips sind bis zur Edit-Zeit t (ab Slot-Anfang) gelaufen."""
+        breaks = self._breaks(duration)
+        t0, s0, speed = breaks[0]
+        for b in breaks[1:]:
+            if t < b[0]:
+                break
+            t0, s0, speed = b
+        return s0 + (t - t0) * speed
+
+    def edit_offset(self, s: float, duration: float) -> float:
+        """Umkehrung von source_offset: zu welcher Edit-Zeit läuft Sekunde s des Clips (ab Ausschnitt-Anfang)?"""
+        breaks = self._breaks(duration)
+        t0, s0, speed = breaks[0]
+        for b in breaks[1:]:
+            if s < b[1]:
+                break
+            t0, s0, speed = b
+        return t0 + (s - s0) / speed
+
+
+NORMAL = Timing()
+
+
+@dataclass(frozen=True)
 class Slot:
     """Zeitraum im fertigen Edit, Sekunden ab Edit-Anfang (0 = song_start)."""
 
@@ -17,10 +67,21 @@ class Slot:
     intensity: float = 0.5
     # Zeitpunkte im Slot (ab Slot-Anfang), auf die ein Bewegungs-Peak passt, der beste zuerst.
     hits: tuple[float, ...] = (0.0,)
+    # Ab Phase 6: Tempo des Clips (Slow-Mo, Speed-Ramp)
+    timing: Timing = NORMAL
 
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+    @property
+    def source_duration(self) -> float:
+        """So viele Sekunden des Clips braucht der Slot (bei Slow-Mo weniger, als der Slot lang ist)."""
+        return self.timing.source_offset(self.duration, self.duration)
+
+    def source_hit(self, offset: float) -> float:
+        """Ein Zeitpunkt im Slot (z. B. ein Beat aus hits) als Sekunden ab Anfang des Clip-Ausschnitts."""
+        return self.timing.source_offset(offset, self.duration)
 
 
 def choose_song_start(
