@@ -1,17 +1,20 @@
 """Kleine Ersatz-Modelle für Tests: kein Download, keine GPU, vorhersagbare Ergebnisse.
 
 FakeClip sieht nur Farben: Rot = romance, Blau = action, Grün = calm. Die Sätze aus
-clip_prompts.yaml zeigen jeweils auf die Achse ihrer Gruppe.
+clip_prompts.yaml zeigen jeweils auf die Achse ihrer Gruppe. FakeFaceDetector hält kräftig farbige
+Flächen für Gesichter (siehe synth_video.make_face_video).
 """
 
 from __future__ import annotations
 
 from typing import Sequence
 
+import cv2
 import numpy as np
 
 from backend.analysis.audio.episode_audio import Segment
 from backend.analysis.video.clip_tags import load_prompts, normalize
+from backend.analysis.video.faces import Face
 from backend.config.settings import ClipModelSettings
 
 AXES = {"romance": 0, "action": 1, "sad": 2, "funny": 3, "calm": 4, "neutral": 5}
@@ -63,3 +66,24 @@ class FakeVad:
 
     def __call__(self, audio: np.ndarray, sample_rate: int) -> list[Segment]:
         return self.segments
+
+
+class FakeFaceDetector:
+    """Jede kräftig farbige Fläche (nicht grau, nicht weiß) ist ein "Gesicht"."""
+
+    name = "fake-faces"
+
+    def __init__(self) -> None:
+        self.frames = 0
+
+    def detect(self, image: np.ndarray) -> list[Face]:
+        self.frames += 1
+        pixels = image.astype(np.int16)
+        mask = ((pixels.max(axis=2) - pixels.min(axis=2)) > 80).astype(np.uint8)
+        count, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+        height, width = mask.shape
+        faces = []
+        for x, y, w, h, area in stats[1:count]:
+            if area >= 0.01 * height * width:
+                faces.append(Face((x / width, y / height, (x + w) / width, (y + h) / height), 0.9))
+        return faces

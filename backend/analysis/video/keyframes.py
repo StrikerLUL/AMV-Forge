@@ -122,9 +122,22 @@ def save_jpeg(image: np.ndarray, path: Path, quality: int) -> None:
     path.write_bytes(data.tobytes())
 
 
-def load_jpeg(path: Path) -> np.ndarray | None:
-    """Liest ein JPG als RGB (None, wenn es fehlt). Auch hier ohne Pfad-Probleme unter Windows."""
+def load_image(path: Path) -> np.ndarray | None:
+    """Liest ein JPG/PNG/WebP als RGB (None, wenn es fehlt oder kaputt ist). Ohne Pfad-Probleme unter Windows."""
     if not path.is_file():
         return None
     image = cv2.imdecode(np.frombuffer(path.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
     return None if image is None else cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+
+def grab_frame(video: Path, time: float, height: int) -> np.ndarray | None:
+    """Ein einzelnes Bild an Sekunde time, height Pixel hoch (RGB). None, wenn ffmpeg dort nichts findet."""
+    width, height = output_size(video, height)
+    result = subprocess.run(
+        ["ffmpeg", "-v", "error", "-ss", f"{max(0.0, time):.3f}", "-i", str(video), "-frames:v", "1", "-an", "-sn",
+         "-vf", f"scale={width}:{height}:flags=area,format=rgb24", "-f", "rawvideo", "-"],
+        capture_output=True,
+    )
+    if result.returncode != 0 or len(result.stdout) < width * height * 3:
+        return None
+    return np.frombuffer(result.stdout[: width * height * 3], dtype=np.uint8).reshape(height, width, 3).copy()

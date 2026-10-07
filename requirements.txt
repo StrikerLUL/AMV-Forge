@@ -21,5 +21,10 @@ silero-vad>=6.2.3          # ab 6.2.3 ohne torchaudio (das würde sonst die CUDA
 pysubs2>=1.6
 sentence-transformers>=3.0
 
+# Phase 5: Charaktere
+# Gesichtsdetektor (YOLO als ONNX-Datei). Rechnet auf der CPU, das reicht. Für die GPU unter Windows
+# stattdessen onnxruntime-directml (README, Phase 5). huggingface_hub kommt schon mit open_clip.
+onnxruntime>=1.17
+
 # Tests
 pytest>=8.0

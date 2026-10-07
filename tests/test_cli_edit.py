@@ -18,8 +18,8 @@ from tests.synth_video import BLUES, REDS, make_color_video
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg fehlt")
 
-# Ohne CLIP, Silero und Satz-Modell: Tests laden nie große Modelle herunter
-LIGHT = 'clip:\n  enabled: false\nepisode_audio:\n  vad: none\nsubtitles:\n  model: ""\n'
+# Ohne CLIP, Silero, Satz-Modell und Gesichtsdetektor: Tests laden nie große Modelle herunter
+LIGHT = 'clip:\n  enabled: false\nepisode_audio:\n  vad: none\nsubtitles:\n  model: ""\nfaces:\n  enabled: false\n'
 
 
 def _episode(path: Path, source: str) -> None:
@@ -77,14 +77,14 @@ def test_romance_and_hype_pick_different_scenes(tmp_path: Path, monkeypatch: pyt
     """Folge 1: ruhige rote Szenen (für FakeClip = Romance). Folge 2: blaue Szenen mit viel Bewegung."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(clip_tags, "is_installed", lambda: True)
-    monkeypatch.setattr("backend.mood_index.OpenClipModel", lambda cfg: FakeClip(cfg))
+    monkeypatch.setattr("backend.analysis.loader.OpenClipModel", lambda cfg: FakeClip(cfg))
     folder = tmp_path / "Testanime" / "S1"
     folder.mkdir(parents=True)
     make_color_video(folder / "Testanime - 01x01.mkv", REDS, moving=False)
     make_color_video(folder / "Testanime - 01x02.mkv", BLUES, moving=True, tone=880.0)
     config = tmp_path / "test.yaml"
     # Einfarbige Testszenen sind sonst "einfarbig" bzw. "unscharf" und flögen raus
-    config.write_text(LIGHT.replace("enabled: false", "enabled: true")
+    config.write_text(LIGHT.replace("clip:\n  enabled: false", "clip:\n  enabled: true")
                       + "quality:\n  flat: 0.0\n  blurry_ratio: 0.0\n", encoding="utf-8")
     common = ["--config", str(config)]
 

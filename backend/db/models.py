@@ -28,6 +28,7 @@ class Season(SQLModel, table=True):
     metadata_done: bool = False
     indexed_at: Optional[datetime] = None
     mood_signature: Optional[str] = None  # Phase 4: Stimmung aller Clips berechnet (mit diesen Signalen)
+    characters_signature: Optional[str] = None  # Phase 5: Gesichter den Figuren zugeordnet (mit diesen Vorbildern)
 
 
 class Episode(SQLModel, table=True):
@@ -55,6 +56,7 @@ class Episode(SQLModel, table=True):
     audio_signature: Optional[str] = None
     subtitle_signature: Optional[str] = None
     subtitle_source: Optional[str] = None  # z. B. "Folge.de.ass", "Spur 2 (ger)" oder "keine"
+    faces_signature: Optional[str] = None  # Phase 5: Gesichter gesucht (und mit CLIP umgerechnet)
 
 
 class SkipSegment(SQLModel, table=True):
@@ -95,10 +97,15 @@ class Clip(SQLModel, table=True):
     quality: Optional[float] = None  # 0-1
     quality_issue: Optional[str] = None  # Grund fürs Aussortieren, z. B. "schwarz" oder "text"
     dialog: Optional[bool] = None  # wird im Clip geredet?
+    # Phase 5: Gesichter und Figuren
+    # [{"t": Sekunde, "box": [x0, y0, x1, y1] als Anteil 0-1, "score": Detektor, "char": AniList-ID oder None,
+    #   "p": Sicherheit der Figur}], [] = keine Gesichter, None = noch nicht gesucht
+    faces: Optional[list] = Field(default=None, sa_column=Column(JSON))
+    characters: Optional[dict] = Field(default=None, sa_column=Column(JSON))  # AniList-ID (als Text) -> Sicherheit 0-1
 
 
 class Character(SQLModel, table=True):
-    """Figur aus AniList, die Bilder brauchen wir in Phase 5 für die Gesichtserkennung."""
+    """Figur aus AniList. Ihr Bild ist das Vorbild für die Gesichtserkennung (Phase 5)."""
 
     id: Optional[int] = Field(default=None, primary_key=True)
     season_id: int = Field(foreign_key="season.id", index=True)

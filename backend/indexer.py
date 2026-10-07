@@ -21,10 +21,12 @@ from backend.analysis.audio.op_ed_detect import Fingerprint, find_shared_segment
 from backend.analysis.intervals import subtract
 from backend.analysis.video.motion import clip_motion, measure_motion
 from backend.analysis.video.scenes import detect_scenes
+from backend.analysis.loader import NONE, ModelLoader
+from backend.character_index import CharacterReport, run_character_passes
 from backend.config.settings import ApiSettings, MotionSettings, Settings
 from backend.db.models import Character, Clip, Episode, Season, SkipSegment
 from backend.media import probe_duration, read_audio
-from backend.mood_index import MoodModels, MoodReport, MoodWork, run_mood_passes
+from backend.mood_index import MoodReport, MoodWork, run_mood_passes
 from backend.sources import anilist, aniskip, jikan
 from backend.sources.base import SourceEpisode, SourceSeason
 from backend.sources.http import ApiClient, ApiError
@@ -40,6 +42,7 @@ class Apis:
     anilist: ApiClient
     jikan: ApiClient
     aniskip: ApiClient
+    transport: httpx.BaseTransport | None = None  # für die Bilder der Figuren (Tests: gefälschte Antworten)
 
     @property
     def network_requests(self) -> int:
@@ -57,6 +60,7 @@ def make_apis(engine: Engine, cfg: ApiSettings, transport: httpx.BaseTransport |
         anilist=client("anilist", "https://graphql.anilist.co", cfg.anilist_interval),
         jikan=client("jikan", "https://api.jikan.moe/v4", cfg.jikan_interval),
         aniskip=client("aniskip", "https://api.aniskip.com", cfg.aniskip_interval),
+        transport=transport,
     )
 
 
@@ -73,13 +77,15 @@ class IndexReport:
     scenes_computed: int = 0
     motion_computed: int = 0
     mood: MoodReport = field(default_factory=MoodReport)
+    characters: CharacterReport = field(default_factory=CharacterReport)
     api_requests: int = 0
 
     @property
     def computed_anything(self) -> bool:
         return bool(
             self.downloads or self.metadata_fetched or self.skips_computed or self.scenes_computed
-            or self.motion_computed or self.mood.computed_anything or self.api_requests
+            or self.motion_computed or self.mood.computed_anything or self.characters.computed_anything
+            or self.api_requests
         )
 
 
@@ -200,6 +206,7 @@ def _prepare_episode(
     meta: dict[int, jikan.EpisodeMeta],
     force: bool,
     report: IndexReport,
+    need_faces: bool = False,
 ) -> _Work | None:
     ep = session.exec(
         select(Episode).where(Episode.season_id == season.id, Episode.number == src.number)
@@ -215,7 +222,7 @@ def _prepare_episode(
     complete = all(sig is not None for sig in (
         ep.skips_source, ep.scenes_signature, ep.motion_signature,
         ep.visual_signature, ep.tags_signature, ep.audio_signature, ep.subtitle_signature,
-    ))
+    )) and (ep.faces_signature is not None or not need_faces)
     path = src.local_path
     if path is None and complete and not force:
         # Fertig analysiert und Datei nicht lokal: nichts herunterladen.
@@ -386,7 +393,7 @@ def index_season(
     apis: Apis | None,
     force: bool = False,
     anilist_override: int | None = None,
-    models: MoodModels | None = None,
+    models: ModelLoader | None = None,
 ) -> IndexReport:
     report = IndexReport(title=src.title, episodes=len(src.episodes))
     requests_before = apis.network_requests if apis else 0
@@ -406,7 +413,11 @@ def index_season(
             except ApiError as exc:
                 log.warning("Jikan nicht erreichbar (%s), keine Filler-Infos", exc)
 
-        work = [w for e in src.episodes if (w := _prepare_episode(session, season, e, meta, force, report))]
+        loader = models or ModelLoader(settings)
+        # Gesichter zählen nur zu "fertig", wenn sie sich überhaupt suchen lassen (onnxruntime installiert)
+        need_faces = loader.detector_name() != NONE
+        work = [w for e in src.episodes
+                if (w := _prepare_episode(session, season, e, meta, force, report, need_faces))]
 
         if any(w.needs_skips for w in work):
             if apis:
@@ -418,7 +429,9 @@ def index_season(
         _motion_pass(session, settings, work, force, report)
         # Phase 4: Bild, Ton, Untertitel pro Folge, danach die Stimmung der ganzen Staffel
         mood_work = [MoodWork(w.episode_id, w.number, w.path, w.duration) for w in work]
-        report.mood = run_mood_passes(session, settings, season, mood_work, models or MoodModels(settings), force)
+        report.mood = run_mood_passes(session, settings, season, mood_work, loader, force)
+        # Phase 5: Gesichter pro Folge, danach die Figuren der ganzen Staffel
+        report.characters = run_character_passes(session, settings, season, mood_work, loader, apis, force)
 
         season.indexed_at = datetime.now(timezone.utc)
         session.add(season)

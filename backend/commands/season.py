@@ -80,8 +80,12 @@ def run_index(args: argparse.Namespace, settings: Settings) -> None:
     m = report.mood
     log.info("Phase 4: Standbilder %d, CLIP-Vergleich %d, Ton %d, Untertitel %d, Stimmung %s",
              m.visual, m.tags, m.audio, m.subtitles, "neu gemischt" if m.mood else "unverändert")
+    c = report.characters
+    log.info("Phase 5: Gesichter %d, Bilder von AniList %d, Figuren %s", c.faces, c.downloads,
+             "neu zugeordnet" if c.matched else "unverändert")
     log.info("Details: python -m backend.cli status --season %d", report.season_id)
     log.info("Stimmung ansehen: python -m backend.cli moods --season %d", report.season_id)
+    log.info("Figuren ansehen: python -m backend.cli characters --season %d", report.season_id)
 
 
 def run_status(args: argparse.Namespace, settings: Settings) -> None:
@@ -115,8 +119,8 @@ def run_status(args: argparse.Namespace, settings: Settings) -> None:
         ).all()
         if main_chars:
             log.info("Hauptfiguren: %s", ", ".join(c.name for c in main_chars))
-        log.info("%-4s %-8s %-15s %-15s %-20s %6s %-9s %-9s %-16s %s", "Nr", "Länge", "OP", "ED", "Quelle", "Clips",
-                 "Bewegung", "Stimmung", "Untertitel", "Titel")
+        log.info("%-4s %-8s %-15s %-15s %-20s %6s %-9s %-9s %-10s %-16s %s", "Nr", "Länge", "OP", "ED", "Quelle",
+                 "Clips", "Bewegung", "Stimmung", "Gesichter", "Untertitel", "Titel")
         for ep in session.exec(select(Episode).where(Episode.season_id == season.id).order_by(Episode.number)):
             skips = session.exec(select(SkipSegment).where(SkipSegment.episode_id == ep.id)).all()
 
@@ -127,11 +131,12 @@ def run_status(args: argparse.Namespace, settings: Settings) -> None:
             clips = session.exec(select(func.count(Clip.id)).where(Clip.episode_id == ep.id)).one()
             flags = " [Filler]" if ep.filler else (" [Recap]" if ep.recap else "")
             mood_done = all((ep.visual_signature, ep.tags_signature, ep.audio_signature, ep.subtitle_signature))
-            log.info("%-4d %-8s %-15s %-15s %-20s %6d %-9s %-9s %-16s %s%s", ep.number,
+            log.info("%-4d %-8s %-15s %-15s %-20s %6d %-9s %-9s %-10s %-16s %s%s", ep.number,
                      fmt_time(ep.duration) if ep.duration else "-", span({"op", "mixed-op"}),
                      span({"ed", "mixed-ed"}), ep.skips_source or "offen", clips,
                      "ja" if ep.motion_signature else "offen", "ja" if mood_done else "offen",
-                     (ep.subtitle_source or "offen")[:16], ep.title or "", flags)
+                     "ja" if ep.faces_signature else "offen", (ep.subtitle_source or "offen")[:16], ep.title or "",
+                     flags)
 
 
 def run_jellyfin_search(args: argparse.Namespace, settings: Settings) -> None:

@@ -7,7 +7,6 @@ default.yaml, wird nur die Stimmung neu gemischt. Beides dauert Sekunden.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import shutil
@@ -16,124 +15,26 @@ import time
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, TypeVar
 
 import numpy as np
 from sqlmodel import Session, select
 
-from backend.analysis.audio import episode_audio
-from backend.analysis.audio.episode_audio import SileroVad, SpeechDetector, analyze_clips
-from backend.analysis.audio.subtitles import (
-    DialogModel, SentenceDialogModel, average_tags, find_subtitles, lines_in, load_lines, sentence_model_installed,
-)
+from backend.analysis.audio.episode_audio import analyze_clips
+from backend.analysis.audio.subtitles import average_tags, find_subtitles, lines_in, load_lines
+from backend.analysis.loader import NONE, ModelLoader
 from backend.analysis.mood import MOODS, ClipSignals, mood_vectors
 from backend.analysis.video import clip_tags
-from backend.analysis.video.clip_tags import ImageTextEmbedder, OpenClipModel, PromptSet, load_prompts, zero_shot
+from backend.analysis.video.clip_tags import PromptSet, load_prompts, zero_shot
 from backend.analysis.video.keyframes import iter_keyframes, save_jpeg
 from backend.analysis.video.quality import ClipStats, FrameStats, clip_quality, combine_stats, frame_stats
 from backend.config.settings import Settings
 from backend.db.models import Clip, Episode, Season
 from backend.media import read_audio
+from backend.signatures import file_signature, signature
 
 log = logging.getLogger(__name__)
 
 MOOD_VERSION = 1  # erhöhen, wenn sich die Berechnung der Stimmung ändert
-NONE = "none"
-T = TypeVar("T")
-
-
-class _Auto:
-    """Platzhalter: Modell selbst laden (statt eines Test-Ersatzes oder None = aus)."""
-
-
-AUTO = _Auto()
-
-
-def signature(*parts: object) -> str:
-    raw = json.dumps([str(p) for p in parts], ensure_ascii=False)
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
-
-
-def file_signature(path: Path) -> str:
-    stat = path.stat()
-    return f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
-
-
-class MoodModels:
-    """CLIP, Silero VAD und das Satz-Modell werden erst geladen, wenn eine Folge sie braucht (einmal pro Lauf).
-
-    Fehlt ein Paket oder scheitert das Laden (z. B. kein Internet beim ersten Download), läuft der
-    Index ohne dieses Signal weiter. Beim nächsten Lauf wird es erneut versucht.
-    """
-
-    def __init__(
-        self,
-        settings: Settings,
-        clip: ImageTextEmbedder | None | _Auto = AUTO,
-        vad: SpeechDetector | None | _Auto = AUTO,
-        dialog: DialogModel | None | _Auto = AUTO,
-    ) -> None:
-        self.settings = settings
-        self._overrides: dict[str, object] = {"clip": clip, "vad": vad, "dialog": dialog}
-        self._loaded: dict[str, object] = {}
-        self._text_embeddings: dict[str, np.ndarray] = {}
-
-    def _name(self, kind: str, wanted: bool, installed: Callable[[], bool], expected: str, package: str) -> str:
-        override = self._overrides[kind]
-        if not isinstance(override, _Auto):
-            return getattr(override, "name") if override is not None else NONE
-        if not wanted:
-            return NONE
-        if not installed():
-            if f"warned-{kind}" not in self._loaded:
-                self._loaded[f"warned-{kind}"] = True
-                log.warning("%s ist nicht installiert, dieses Signal fehlt (Anleitung: README, Phase 4).", package)
-            return NONE
-        return expected
-
-    def clip_name(self) -> str:
-        c = self.settings.clip
-        return self._name("clip", c.enabled, clip_tags.is_installed, f"{c.model}/{c.pretrained}/{c.crop}",
-                          "open_clip_torch")
-
-    def vad_name(self) -> str:
-        a = self.settings.episode_audio
-        return self._name("vad", a.vad == "silero", episode_audio.silero_installed, f"silero/{a.vad_threshold}",
-                          "silero-vad")
-
-    def dialog_name(self) -> str:
-        s = self.settings.subtitles
-        return self._name("dialog", bool(s.model), sentence_model_installed, s.model, "sentence-transformers")
-
-    def _get(self, kind: str, name: str, factory: Callable[[], T]) -> T | None:
-        override = self._overrides[kind]
-        if not isinstance(override, _Auto):
-            return override  # type: ignore[return-value]
-        if name == NONE:
-            return None
-        if kind not in self._loaded:
-            try:
-                self._loaded[kind] = factory()
-            except Exception as exc:  # Download, CUDA, kaputte Installation: ohne dieses Signal weiter
-                log.warning("%s konnte nicht geladen werden (%s: %s). Weiter ohne dieses Signal.",
-                            name, type(exc).__name__, exc)
-                self._loaded[kind] = None
-        return self._loaded[kind]  # type: ignore[return-value]
-
-    def clip(self) -> ImageTextEmbedder | None:
-        return self._get("clip", self.clip_name(), lambda: OpenClipModel(self.settings.clip))
-
-    def vad(self) -> SpeechDetector | None:
-        return self._get("vad", self.vad_name(), lambda: SileroVad(self.settings.episode_audio.vad_threshold))
-
-    def dialog(self) -> DialogModel | None:
-        return self._get("dialog", self.dialog_name(), lambda: SentenceDialogModel(self.settings.subtitles))
-
-    def text_embeddings(self, model: ImageTextEmbedder, prompts: PromptSet) -> np.ndarray:
-        key = signature(model.name, *prompts.texts)
-        if key not in self._text_embeddings:
-            self._text_embeddings[key] = model.embed_texts(prompts.texts)
-        return self._text_embeddings[key]
 
 
 @dataclass(frozen=True)
@@ -184,7 +85,7 @@ def _visual_signature(ep: Episode, settings: Settings, model_name: str) -> str:
     return signature(ep.scenes_signature, asdict(settings.keyframes), model_name)
 
 
-def visual_pass(session: Session, settings: Settings, work: list[MoodWork], models: MoodModels, force: bool,
+def visual_pass(session: Session, settings: Settings, work: list[MoodWork], models: ModelLoader, force: bool,
                 report: MoodReport) -> None:
     """Standbilder pro Clip: Vorschaubild, Helligkeit/Kontrast/Schärfe und (mit CLIP) ein Embedding."""
     cfg = settings.keyframes
@@ -268,7 +169,7 @@ def visual_pass(session: Session, settings: Settings, work: list[MoodWork], mode
                  sum(len(s) for s in stats), time.monotonic() - started)
 
 
-def tags_pass(session: Session, settings: Settings, work: list[MoodWork], models: MoodModels, force: bool,
+def tags_pass(session: Session, settings: Settings, work: list[MoodWork], models: ModelLoader, force: bool,
               report: MoodReport) -> None:
     """CLIP-Vergleich der gespeicherten Embeddings mit den Sätzen aus clip_prompts.yaml."""
     prompts_text = settings.clip.prompts.read_text(encoding="utf-8")
@@ -306,7 +207,7 @@ def tags_pass(session: Session, settings: Settings, work: list[MoodWork], models
         report.tags += 1
 
 
-def audio_pass(session: Session, settings: Settings, work: list[MoodWork], models: MoodModels, force: bool,
+def audio_pass(session: Session, settings: Settings, work: list[MoodWork], models: ModelLoader, force: bool,
                report: MoodReport) -> None:
     """Lautstärke und Sprachanteil pro Clip aus dem Ton der Folge."""
     cfg = settings.episode_audio
@@ -337,7 +238,7 @@ def audio_pass(session: Session, settings: Settings, work: list[MoodWork], model
         report.audio += 1
 
 
-def subtitle_pass(session: Session, settings: Settings, work: list[MoodWork], models: MoodModels, force: bool,
+def subtitle_pass(session: Session, settings: Settings, work: list[MoodWork], models: ModelLoader, force: bool,
                   report: MoodReport) -> None:
     """Untertitel pro Clip und (mit Satz-Modell) ihre Stimmung."""
     cfg = settings.subtitles
@@ -436,7 +337,7 @@ def mood_pass(session: Session, settings: Settings, season: Season, force: bool,
 
 
 def run_mood_passes(session: Session, settings: Settings, season: Season, work: list[MoodWork],
-                    models: MoodModels, force: bool) -> MoodReport:
+                    models: ModelLoader, force: bool) -> MoodReport:
     report = MoodReport()
     visual_pass(session, settings, work, models, force, report)
     tags_pass(session, settings, work, models, force, report)

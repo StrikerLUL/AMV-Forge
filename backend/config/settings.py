@@ -144,6 +144,7 @@ class ScoreWeights:
 class PlannerSettings:
     pick_from_top: int
     max_same_episode_in_row: int
+    max_same_character_in_row: int
     weights: ScoreWeights
     repeat_window: int
 
@@ -207,6 +208,36 @@ class QualitySettings:
 
 
 @dataclass(frozen=True)
+class FaceSettings:
+    enabled: bool
+    repo: str
+    model: str
+    device: str
+    height: int
+    min_confidence: float
+    iou: float
+    min_size: float
+    max_per_frame: int
+    crop_scale: float
+    cache_dir: Path
+
+
+@dataclass(frozen=True)
+class CharacterSettings:
+    image_dir: Path
+    extra_dir: Path
+    download_interval: float
+    roles: tuple[str, ...]
+    rounds: int
+    seed_faces: int
+    max_seed_faces: int
+    seed_probability: float
+    reference_weight: float
+    scale: float
+    min_probability: float
+
+
+@dataclass(frozen=True)
 class Settings:
     quick: QuickSettings
     scenes: SceneSettings
@@ -225,6 +256,8 @@ class Settings:
     subtitles: SubtitleSettings
     mood: MoodSettings
     quality: QualitySettings
+    faces: FaceSettings
+    characters: CharacterSettings
 
 
 def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -247,6 +280,7 @@ def load_settings(path: Path | None = None) -> Settings:
     planner = raw["planner"]
     clip = raw["clip"]
     subs = raw["subtitles"]
+    chars = raw["characters"]
     return Settings(
         quick=QuickSettings(**raw["quick"]),
         scenes=SceneSettings(**raw["scenes"]),
@@ -278,4 +312,11 @@ def load_settings(path: Path | None = None) -> Settings:
         }),
         mood=MoodSettings(weights={signal: dict(w) for signal, w in raw["mood"]["weights"].items()}),
         quality=QualitySettings(**raw["quality"]),
+        faces=FaceSettings(**{**raw["faces"], "cache_dir": Path(raw["faces"]["cache_dir"])}),
+        characters=CharacterSettings(**{
+            **chars,
+            "image_dir": Path(chars["image_dir"]),
+            "extra_dir": Path(chars["extra_dir"]),
+            "roles": tuple(str(r).upper() for r in chars["roles"]),
+        }),
     )
