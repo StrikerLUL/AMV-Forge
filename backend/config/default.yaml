@@ -142,15 +142,22 @@ planner:
   # Nicht öfter hintereinander Clips mit derselben Figur (ab Phase 5, 0 = egal).
   # Figuren, die du mit --characters ausdrücklich willst, zählen nicht.
   max_same_character_in_row: 2
+  # Streuung: Aus jeder Spanne von spread_window_seconds einer Folge kommen höchstens spread_max_clips Clips ins
+  # Edit, damit es nicht viele Schnitte aus derselben Szene nimmt (z. B. 9 Clips aus einem 30-s-Kampf). Gibt es an
+  # anderen Stellen keinen passenden Clip mehr (z. B. nur 71 Paar-Szenen für 81 Schnitte), steigt die Grenze um 1,
+  # statt Schnitte zu verlieren. 1 = noch mehr Streuung (kostet bei Hype die besten Action-Clips), 0 = aus.
+  spread_max_clips: 2
+  spread_window_seconds: 60
   # Score-Formel (Phase 4), Gewichte ohne --style. Jeder Stil in backend/styles/ überschreibt sie:
   # Score = mood*Stimmung + energy*(1 - |Bewegung - Song-Energie|) + character*Figuren
-  #         + quality*Qualität - repeat*Wiederholung - dialog*Sprache im Clip
+  #         + quality*Qualität - repeat*Wiederholung - overuse*Überhang - dialog*Sprache im Clip
   weights:
     mood: 0.0        # passt die Stimmung des Clips zum Stil?
     energy: 1.0      # passt die Bewegung zur Energie des Songs an der Stelle (Drop = viel Bewegung)?
     character: 1.0   # wie sicher die Figuren aus --characters im Bild sind (ohne --characters egal)
     quality: 0.3     # Bildqualität 0-1
     repeat: 0.3      # Abzug, wenn die Folge in den letzten Clips schon oft dran war
+    overuse: 0.3     # Abzug, wenn die Folge im ganzen Edit schon deutlich öfter dran war als der Durchschnitt
     dialog: 0.0      # Abzug für Clips, in denen geredet wird (Mundbewegung ohne Ton wirkt komisch)
   # So viele der letzten Clips zählen für "repeat"
   repeat_window: 6

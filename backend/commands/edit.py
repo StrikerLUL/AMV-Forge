@@ -30,6 +30,7 @@ from backend.planner.assign import Assignment, Candidate, assign_to_beats, usabl
 from backend.planner.scoring import character_tiers
 from backend.planner.slots import Slot, build_slots, choose_song_start
 from backend.planner.song_slots import build_song_slots, choose_edit_start, summarize
+from backend.planner.spread import densest_stretch
 from backend.render.ffmpeg_graph import RenderOptions, render_edit
 from backend.songs import load_song
 
@@ -109,6 +110,7 @@ def _finish(
 ) -> Path:
     aligned = sum(1 for a in assignments if a.aligned)
     log.info("Bewegungs-Peak genau auf dem Beat: %d von %d Clips", aligned, len(assignments))
+    _log_densest(assignments, settings.planner.spread_window_seconds or 60.0)
 
     r = settings.render
     width, height = (r.preview_width, r.preview_height) if args.preview else (r.width, r.height)
@@ -140,6 +142,8 @@ def _finish(
                 "speech": a.candidate.speech if a.candidate else None,
                 "characters": _named(a.candidate.characters, names) if a.candidate else None,
                 "score": a.score,
+                # So viele Clips des Edits kamen bei der Wahl aus derselben Stelle der Folge (Streuung)
+                "crowd": a.crowd,
             }
             for a in assignments
         ],
@@ -147,6 +151,17 @@ def _finish(
     plan_file.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
     log.info("Schnittliste: %s", plan_file)
     return out
+
+
+def _log_densest(assignments: list[Assignment], window: float) -> None:
+    """Zeigt die Stelle einer Folge, aus der die meisten Clips kommen (zum Vergleich mit und ohne Streuung)."""
+    stretch = densest_stretch([a.candidate for a in assignments if a.candidate], window)
+    if stretch is None:
+        return
+    where = f"Folge {stretch.episode}" if stretch.episode is not None else "der Folge"
+    span = (f"bei {fmt_time(stretch.start)}" if stretch.start == stretch.end
+            else f"zwischen {fmt_time(stretch.start)} und {fmt_time(stretch.end)}")
+    log.info("Dichteste Stelle: %d Clips aus %s %s (innerhalb von %.0f s)", stretch.count, where, span, window)
 
 
 def _named(found: dict[int, float] | None, names: dict[int, str] | None) -> dict[str, float] | None:
@@ -184,7 +199,8 @@ def run_quick(args: argparse.Namespace, settings: Settings) -> Path:
     seed = _seed(args)
     p = settings.planner
     assignments = assign_to_beats(slots, candidates, random.Random(seed), p.weights, p.pick_from_top, 0,
-                                  repeat_window=p.repeat_window)
+                                  repeat_window=p.repeat_window, spread_max_clips=p.spread_max_clips,
+                                  spread_window=p.spread_window_seconds)
     return _finish(args, settings, song, song_start, assignments, seed, {"video": str(args.video)})
 
 
@@ -338,6 +354,8 @@ def run_edit(args: argparse.Namespace, settings: Settings) -> Path:
         repeat_window=p.repeat_window,
         characters=[c.anilist_id for c in wanted],
         max_same_character_in_row=p.max_same_character_in_row,
+        spread_max_clips=p.spread_max_clips,
+        spread_window=p.spread_window_seconds,
     )
     episodes = [a.episode for a in assignments]
     log.info("Folgen im Edit: %s", ", ".join(f"{n}x Folge {e}" for e, n in

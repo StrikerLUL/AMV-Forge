@@ -64,6 +64,7 @@ def test_edit_cuts_the_drop_faster_than_the_verse(
     drop_avg = sum(lengths["drop"]) / len(lengths["drop"])
     assert drop_avg < 0.5 * verse_avg  # der Drop ist sichtbar schneller geschnitten
     assert {clip["episode"] for clip in plan["clips"]} == {1, 2}
+    assert all(clip["crowd"] >= 1 for clip in plan["clips"])  # Streuung ist an
 
 
 def test_edit_asks_for_index_when_motion_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
