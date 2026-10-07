@@ -130,7 +130,7 @@ class MotionSettings:
 
 @dataclass(frozen=True)
 class ScoreWeights:
-    """Gewichte der Score-Formel aus CLAUDE.md (w_m, w_e, w_c, w_q, w_r, w_d)."""
+    """Gewichte der Score-Formel aus CLAUDE.md (w_m, w_e, w_c, w_q, w_r, w_d) plus w_o für den Folgen-Überhang."""
 
     mood: float = 0.0
     energy: float = 1.0
@@ -138,6 +138,7 @@ class ScoreWeights:
     quality: float = 0.3
     repeat: float = 0.3
     dialog: float = 0.0
+    overuse: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,8 @@ class PlannerSettings:
     max_same_character_in_row: int
     weights: ScoreWeights
     repeat_window: int
+    spread_max_clips: int = 0
+    spread_window_seconds: float = 60.0
 
 
 @dataclass(frozen=True)

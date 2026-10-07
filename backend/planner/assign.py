@@ -3,13 +3,15 @@
 Phase 1: zufällig (assign_random). Phase 3: Bewegung passend zur Song-Energie, und der stärkste
 Bewegungsmoment des Clips landet genau auf einem Beat (assign_to_beats). Phase 4: Auswahl nach der
 Score-Formel (scoring.py) mit Stimmung, Qualität, Wiederholung und Dialog. Phase 5: gewünschte
-Figuren (--characters) und nicht zu oft dieselbe Figur hintereinander.
+Figuren (--characters) und nicht zu oft dieselbe Figur hintereinander. Streuung (spread.py): höchstens
+2 Clips pro Minute einer Folge, damit ein Edit nicht eine Szene nacherzählt.
 """
 
 from __future__ import annotations
 
 import logging
 import random
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -18,6 +20,7 @@ from backend.analysis.video.scenes import Scene
 from backend.config.settings import ScoreWeights
 from backend.planner.scoring import ENERGY_ONLY, character_tiers, score_clip, style_pool
 from backend.planner.slots import Slot
+from backend.planner.spread import Occupied, spread_out
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +64,9 @@ class Assignment:
     aligned: bool = False
     candidate: Candidate | None = None
     score: float | None = None
+    # So viele Clips des Edits kamen bei der Wahl aus der vollsten Spanne seiner Folge um ihn herum
+    # (er mitgezählt, 1 = allein an seiner Stelle, None = Streuung aus)
+    crowd: int | None = None
 
     @property
     def source_end(self) -> float:
@@ -173,13 +179,19 @@ def assign_to_beats(
     repeat_window: int = 6,
     characters: Sequence[int] = (),
     max_same_character_in_row: int = 0,
+    spread_max_clips: int = 0,
+    spread_window: float = 60.0,
 ) -> list[Assignment]:
     """Greedy, Slot für Slot: passend lange Clips, möglichst mit Peak auf dem Beat, nach Score sortiert.
 
     Mit characters (AniList-IDs) kommen zuerst Clips mit allen diesen Figuren dran, sind die aufgebraucht,
     Clips mit mindestens einer. Mit target (Ziel-Stimmung eines Stils) kommen davon nur die pool_share
-    besten nach Stimmung in Frage. Aus den pick_from_top besten nach Score wird zufällig gewählt, damit
-    nicht jedes Edit gleich aussieht. Kein Clip doppelt, nicht zu oft dieselbe Folge oder Figur hintereinander.
+    besten nach Stimmung in Frage. Darunter nur Clips, mit denen aus keiner Spanne von spread_window Sekunden
+    einer Folge mehr als spread_max_clips Clips kommen (bei knappem Pool gelockert, siehe spread.py). Aus den
+    pick_from_top besten nach Score wird zufällig gewählt, damit nicht jedes Edit gleich aussieht. Kein Clip
+    doppelt, nicht zu oft dieselbe Folge oder Figur hintereinander.
+
+    Reihenfolge, wenn sich Wünsche widersprechen: Figuren vor Stil vor Streuung vor Abwechslung vor Beat.
     """
     if not candidates:
         raise ValueError("Keine Clips zur Auswahl.")
@@ -188,7 +200,10 @@ def assign_to_beats(
     tiers = character_tiers(candidates, list(wanted)) if wanted else []
     among = sorted(tiers[-1]) if tiers and tiers[-1] else None
     in_style = style_pool(candidates, target, pool_share, among) if target else None
+    episode_count = len({c.episode for c in candidates if c.episode is not None})
     used: set[int] = set()
+    occupied = Occupied()
+    in_edit: Counter[int | None] = Counter()
     result: list[Assignment] = []
 
     for slot in slots:
@@ -210,6 +225,7 @@ def assign_to_beats(
                 break
         if in_style is not None:
             pool = [i for i in pool if i in in_style] or pool
+        pool = spread_out(pool, candidates, occupied, spread_max_clips, spread_window)
 
         recent = [a.episode for a in result[-max_same_episode_in_row:]] if max_same_episode_in_row > 0 else []
         if len(recent) == max_same_episode_in_row and recent and len(set(recent)) == 1 and recent[0] is not None:
@@ -223,13 +239,24 @@ def assign_to_beats(
         alignable = [i for i in pool if _can_align(candidates[i], slot)]
         pool = alignable or pool
         window = [a.episode for a in result[-repeat_window:]] if repeat_window > 0 else []
-        scores = {i: score_clip(candidates[i], ranks[i], slot.intensity, weights, target, window, list(wanted)).total
+        scores = {i: score_clip(candidates[i], ranks[i], slot.intensity, weights, target, window, list(wanted),
+                                in_edit, episode_count).total
                   for i in pool}
         best = sorted(pool, key=lambda i: (-scores[i], i))[: max(1, pick_from_top)]
         idx = rng.choice(best)
         used.add(idx)
         cand = candidates[idx]
+        crowd = occupied.crowd(cand, spread_window) if spread_max_clips > 0 else None
+        occupied.add(cand)
+        in_edit[cand.episode] += 1
         start, aligned = align_start(cand, slot)
         result.append(Assignment(slot=slot, source_start=start, video=cand.video, episode=cand.episode,
-                                 aligned=aligned, candidate=cand, score=scores[idx]))
+                                 aligned=aligned, candidate=cand, score=scores[idx], crowd=crowd))
+    if spread_max_clips > 0:
+        over = [a.crowd for a in result if a.crowd is not None and a.crowd > spread_max_clips]
+        log.info("Streuung (höchstens %d Clips aus %.0f s einer Folge): eingehalten bei %d von %d Clips",
+                 spread_max_clips, spread_window, len(result) - len(over), len(result))
+        if over:
+            log.info("  bei %d Clips gelockert, bis zu %d aus derselben Stelle (an anderen Stellen gab es keinen "
+                     "passenden Clip mehr)", len(over), max(over))
     return result

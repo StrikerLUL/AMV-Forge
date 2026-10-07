@@ -3,13 +3,14 @@
 Aus einer Anime-Staffel und einem Song automatisch ein beat-synchrones 9:16-Edit für TikTok schneiden.
 Die komplette Projektbeschreibung und Roadmap steht in [CLAUDE.md](CLAUDE.md).
 
-## Stand: Phase 5 (Charaktere)
+## Stand: Phase 5 (Charaktere) + Streuung
 
 - **Phase 1, `quick`:** Eine Folge + ein Song → 9:16-MP4, jeder Schnitt exakt auf dem Beat.
 - **Phase 2, `index`:** Eine ganze Staffel (aus einem Ordner oder aus Jellyfin) wird einmal analysiert und landet in `data/amv_forge.sqlite`: Folgen, Szenen ohne Opening/Ending/Recap, Metadaten und Charaktere von AniList, Filler-Markierung von Jikan. Ein zweiter Lauf berechnet nichts neu.
 - **Phase 3, `song` und `edit`:** Der Song wird in Abschnitte (Intro, Verse, Chorus …) zerlegt, Drops werden erkannt. Im Verse wird ruhig geschnitten, im Build-up immer dichter, im Drop zweimal pro Beat. Jeder Clip wird so gelegt, dass sein stärkster Bewegungsmoment genau auf einem Beat liegt, und wilde Clips landen im Drop, ruhige im Intro. `edit` nimmt die Clips aus der ganzen Staffel.
 - **Phase 4, Stimmung und `--style`:** `index` schaut sich jetzt jeden Clip an (CLIP), hört hin (Lautstärke, wird geredet?) und liest die Untertitel. Daraus wird pro Clip ein Stimmungsvektor (romance, action, sad, funny, calm). `edit --style romance` nimmt dann fast nur ruhige Paar-Szenen, `--style hype` fast nur Action. Schwarzbilder, Abspann, Logos und verwackelte Clips fliegen raus. `moods` zeigt, was erkannt wurde, mit Kontaktbögen zum Anschauen.
 - **Phase 5, Figuren und `--characters`:** `index` sucht jetzt in jedem Clip Anime-Gesichter und ordnet sie den Figuren von AniList zu. `edit --characters "Hori,Miyamura"` nimmt dann zuerst Szenen, in denen beide zu sehen sind. `characters` zeigt, wer wie oft erkannt wurde, mit Kontaktbögen der Gesichter zum Prüfen.
+- **Streuung (nach Phase 5):** Aus jeder Minute einer Folge kommen höchstens 2 Clips ins Edit, und Folgen, die schon deutlich öfter dran waren als der Durchschnitt, bekommen einen Abzug. Ein Edit erzählt so nicht mehr eine einzelne Kampfszene nach.
 
 ### So läuft `quick` (Phase 1)
 
@@ -52,7 +53,7 @@ Alles passiert in `index`, pro Folge einmal (`backend/mood_index.py`):
 6. **Stimmungsvektor** (`backend/analysis/mood.py`): Jedes Signal wird innerhalb der Staffel in einen Rang 0–1 umgerechnet (0 = kleinster Wert der Staffel, 1 = größter). Pro Stimmung ergibt sich dann ein gewichteter Mittelwert: viel Bewegung und laut → action, leise ohne Sprache → romance/calm, dazu CLIP und Untertitel. Die Gewichte stehen unter `mood.weights` in `default.yaml`. Fehlt ein Signal (keine Untertitel), zählen nur die anderen.
 
 Danach wählt `edit` mit der **Score-Formel** (`backend/planner/scoring.py`) aus CLAUDE.md:
-`Score = Stimmung + Energie-Passung + Qualität − Wiederholung − Dialog`, jeweils mit Gewicht. Die Ziel-Stimmung und die Gewichte jedes Stils stehen in `backend/styles/<stil>.yaml` (romance, hype, sad, funny). Mit Stil kommen nur die 30 % der Clips in Frage, die am besten zur Ziel-Stimmung passen, daraus nimmt der Planer pro Slot einen der 8 besten.
+`Score = Stimmung + Energie-Passung + Qualität − Wiederholung − Überhang − Dialog`, jeweils mit Gewicht (Überhang siehe Streuung unten). Die Ziel-Stimmung und die Gewichte jedes Stils stehen in `backend/styles/<stil>.yaml` (romance, hype, sad, funny). Mit Stil kommen nur die 30 % der Clips in Frage, die am besten zur Ziel-Stimmung passen, daraus nimmt der Planer pro Slot einen der 8 besten.
 
 ### So läuft die Figurenerkennung (Phase 5)
 
@@ -64,6 +65,15 @@ Auch das passiert in `index` (`backend/character_index.py`), erst pro Folge, dan
 4. **Zuordnen** (`backend/analysis/characters.py`): Die AniList-Bilder sind oft anders gezeichnet als die Folgen. Deshalb sucht das Tool zuerst nur die paar Gesichter, die einem Vorbild *eindeutig* ähnlicher sind als dem Rest der Staffel. Deren Durchschnitt ist das neue Vorbild, jetzt im Zeichenstil der Folgen, und mit ihm kommen in jeder Runde mehr sichere Treffer dazu. Am Ende gehört ein Gesicht zu der Figur, der es deutlich ähnlicher ist als der zweitähnlichsten. Ist es zwei Figuren etwa gleich ähnlich (oder keiner), bleibt es „unbekannt“. Die Sicherheit (0,5–1) steht pro Gesicht und Clip in der Datenbank.
 
 Ändern sich nur die Vorbilder oder die Einstellungen unter `characters:`, wird nur neu zugeordnet, das dauert Sekunden. `edit --characters` nutzt das so (`backend/planner/assign.py`): Erst kommen Clips mit allen gewünschten Figuren dran, sind die aufgebraucht, Clips mit mindestens einer davon, erst dann Wiederholungen. Mit `--style` werden die 30 % ruhigsten (bzw. wildesten …) Clips unter diesen Clips gesucht, nicht in der ganzen Staffel. In der Score-Formel zählt `character` mit, wie sicher die Figuren im Bild sind. Außerdem kommt keine Figur öfter als zweimal hintereinander, außer denen aus `--characters`.
+
+### So läuft die Streuung
+
+Ohne Streuung nimmt der Planer pro Slot einfach einen der besten Clips. Die besten Action-Clips liegen aber oft dicht beieinander, z. B. 9 Clips aus einem 30-Sekunden-Kampf, und das Edit erzählt dann eine Szene nach. Deshalb gibt es zwei Regeln (`backend/planner/spread.py`, Einstellungen unter `planner:` in `default.yaml`):
+
+1. **Höchstens 2 Clips pro Minute einer Folge** (`spread_max_clips: 2`, `spread_window_seconds: 60`): Ein Clip, mit dem eine Minute einer Folge schon 3 Clips im Edit hätte, kommt nicht in Frage, solange es an anderen Stellen noch passende Clips gibt. Gibt es keine mehr (knapper Pool, z. B. nur 71 Paar-Szenen für 81 Schnitte), steigt die Grenze auf 3, dann 4 …, statt Schnitte zu verlieren. Ein fester Mindestabstand (z. B. 30 s) würde um jeden Clip eine ganze Minute sperren, bei einem Kampf bliebe dann nur ein Clip, und Hype-Edits verlieren ihre besten Szenen.
+2. **Überhang** (`weights.overuse: 0.3`): Kam eine Folge im bisherigen Edit schon deutlich öfter dran als der Durchschnitt, gibt es einen Abzug im Score. Beispiel: Nach 26 Clips aus 13 Folgen ist der Durchschnitt 2, eine Folge mit 3 Clips bekommt ein Drittel des Abzugs, ab 5 den vollen.
+
+Wenn sich Wünsche widersprechen, gilt: gewünschte Figuren vor Stil vor Streuung vor Abwechslung (Folge/Figur nicht 3× hintereinander) vor Bewegungs-Peak auf dem Beat. Bei `--characters "Hori,Miyamura"` mit 81 Schnitten und 71 Paar-Szenen werden deshalb alle Paar-Szenen genommen, egal wo sie liegen; die Streuung wirkt erst, wenn es mehr passende Clips als Schnitte gibt. Am Ende zeigt `edit` die dichteste Stelle („Dichteste Stelle: 2 Clips aus Folge 1 zwischen 10:18.0 und 10:44.0“), in der `.plan.json` steht pro Clip `crowd` (so viele Clips kamen bei der Wahl aus derselben Minute der Folge).
 
 ## Installation (Windows)
 
@@ -215,6 +225,7 @@ Am Ende steht, welche Stimmung im Edit steckt („Stärkste Stimmung pro Clip: r
 | `default.yaml` → `mood.weights` | Wie stark CLIP, Bewegung, Ton, Untertitel zählen | Nur die Mischung, Sekunden |
 | `default.yaml` → `quality` | Ab wann ein Clip als schwarz/Text/unscharf gilt | Nur die Mischung |
 | `backend/styles/*.yaml` | Ziel-Stimmung, Pool-Größe, Gewichte der Score-Formel | Nichts, wirkt sofort beim nächsten `edit` |
+| `default.yaml` → `planner` | Streuung: `spread_max_clips`, `spread_window_seconds`, `weights.overuse` | Nichts, wirkt sofort beim nächsten `edit` |
 
 Nach Änderungen an den Prompts, Gewichten oder Qualitäts-Schwellen einmal `index` laufen lassen.
 Tipp OneDrive: Die Vorschaubilder sind etwa 15 KB pro Clip (bei einer Staffel einige Tausend Dateien). Wer das nicht in OneDrive haben will, setzt `keyframes.cache_dir` und `clip.cache_dir` in einer eigenen YAML auf einen Ordner außerhalb.
@@ -296,6 +307,24 @@ Danach `index` wie oben: Es wird nur neu zugeordnet, das dauert Sekunden. Die Ei
 | `planner.max_same_character_in_row` (2) | so oft hintereinander darf dieselbe Figur kommen (ohne `--characters`) |
 
 Bekannte Grenze: Eine Nebenfigur, die in der Staffel kaum vorkommt, kann Gesichtern von Figuren ohne AniList-Eintrag zugeordnet werden. Das sieht man in `characters` (viele Clips für eine kleine Rolle). Für die Hauptfiguren und `--characters` spielt das kaum eine Rolle.
+
+## Benutzung: Streuung
+
+Läuft bei `edit` und `quick` automatisch. Zum Vergleich mit dem alten Verhalten eine eigene YAML anlegen, z. B. `data\ohne_streuung.yaml`:
+
+```yaml
+planner:
+  spread_max_clips: 0
+  weights:
+    overuse: 0
+```
+
+```bat
+python -m backend.cli edit --season 1 --song "C:\Musik\song.mp3" --style hype --seed 7 --preview --out data\renders\hype_alt.mp4 --config data\ohne_streuung.yaml
+python -m backend.cli edit --season 1 --song "C:\Musik\song.mp3" --style hype --seed 7 --preview --out data\renders\hype.mp4
+```
+
+Mit demselben Seed ist das erste Edit genau das von vorher. Die Zeilen „Folgen im Edit“ und „Dichteste Stelle“ zeigen den Unterschied. Wer noch mehr Streuung will, setzt `spread_max_clips: 1` (kostet bei Hype etwas Action), wer weniger will, `3`.
 
 ## Tests
 
