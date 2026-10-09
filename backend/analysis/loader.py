@@ -29,6 +29,16 @@ NONE = "none"
 T = TypeVar("T")
 
 
+def repair_hint(exc: BaseException) -> str | None:
+    """Bekannte Ursachen, warum ein Modell nicht lädt, mit dem Weg zur Reparatur."""
+    if "torchaudio" in f"{exc}":
+        # Neuere transformers laden torchaudio mit, sobald es installiert ist. Passt es nicht zur
+        # torch-Version (z. B. nach einem torch-Update mit CUDA), lädt seine DLL nicht.
+        return ("Ursache: torchaudio passt nicht zu deinem torch. AMV-Forge braucht es nicht (nur das optionale "
+                "allin1), also deinstallieren: python -m pip uninstall -y torchaudio (README, Phase 7).")
+    return None
+
+
 class _Auto:
     """Platzhalter: Modell selbst laden (statt eines Test-Ersatzes oder None = aus)."""
 
@@ -102,6 +112,9 @@ class ModelLoader:
             except Exception as exc:  # Download, CUDA, kaputte Installation: ohne dieses Signal weiter
                 log.warning("%s konnte nicht geladen werden (%s: %s). Weiter ohne dieses Signal.",
                             name, type(exc).__name__, exc)
+                hint = repair_hint(exc)
+                if hint:
+                    log.warning("%s", hint)
                 self._loaded[kind] = None
         return self._loaded[kind]  # type: ignore[return-value]
 
