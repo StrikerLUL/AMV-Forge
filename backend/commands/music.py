@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 from sqlmodel import Session, select
@@ -24,8 +25,9 @@ from backend.media import require_ffmpeg
 from backend.music_index import MusicReport, index_library
 from backend.planner.assign import Candidate
 from backend.planner.suggest import LibrarySong, SeasonProfile, Suggestion, season_profile, suggest
+from backend.signatures import content_signature
 from backend.sources.jellyfin import JellyfinClient
-from backend.sources.music import scan_music_folder
+from backend.sources.music import scan_music_folder, song_label
 
 log = logging.getLogger("amv_forge")
 
@@ -101,7 +103,7 @@ def run_music(args: argparse.Namespace, settings: Settings) -> None:
 
     with Session(engine) as session:
         rows = _list_songs(session)
-    with_mood = [r for r in rows if r.mood is not None]
+    with_mood, copies = without_copies([r for r in rows if r.mood is not None])
     if args.list:
         for r in with_mood:
             log.info("%-45s %6.1f BPM  %-8s %-6s %s", _label(r)[:45], r.bpm, r.musical_key or "-",
@@ -109,15 +111,52 @@ def run_music(args: argparse.Namespace, settings: Settings) -> None:
     counts = Counter(dominant(r.mood or {}) for r in with_mood)
     log.info("In der Datenbank: %d Songs mit Stimmung (stärkste Stimmung: %s)", len(with_mood),
              ", ".join(f"{m} {counts.get(m, 0)}" for m in MOODS))
-    if len(rows) > len(with_mood):
+    for copy, kept in copies:
+        log.info("%s ist dieselbe Datei wie %s und zählt nur einmal", Path(copy.path).name, _label(kept))
+    no_mood = sum(1 for r in rows if r.mood is None)
+    if no_mood:
         log.info("%d Songs ohne Stimmung (einzeln mit 'song' oder 'edit' analysiert): 'music' mit ihrem Ordner "
-                 "oder 'song <Datei>' holt sie nach", len(rows) - len(with_mood))
+                 "oder 'song <Datei>' holt sie nach", no_mood)
+    clap_note = _clap_note(without_clap(with_mood), len(with_mood), settings)
+    if clap_note:
+        log.warning("%s", clap_note)
     log.info("Vorschläge: python -m backend.cli suggest --season <ID> --style romance")
 
 
 def _label(row: Song) -> str:
-    title = row.title or Path(row.path).stem
-    return f"{row.artist} - {title}" if row.artist else title
+    return song_label(row.artist, row.title or Path(row.path).stem)
+
+
+def without_copies(rows: list[Song]) -> tuple[list[Song], list[tuple[Song, Song]]]:
+    """Dieselbe Datei unter zwei Namen (z. B. song.mp3 und der Song im Musikordner) zählt nur einmal.
+
+    Behalten wird der Song aus der Bibliothek (mit Titel und Interpret). Gibt auch (Kopie, behalten) zurück.
+    Verglichen wird nur, was gleich groß ist, das geht schnell. Fehlende Dateien bleiben, wie sie sind.
+    """
+    by_size: dict[int, list[Song]] = {}
+    for row in rows:
+        if Path(row.path).is_file():
+            by_size.setdefault(Path(row.path).stat().st_size, []).append(row)
+    copies: set[int] = set()
+    pairs: list[tuple[Song, Song]] = []
+    for same_size in by_size.values():
+        if len(same_size) < 2:
+            continue
+        by_content: dict[str, list[Song]] = {}
+        for row in same_size:
+            by_content.setdefault(content_signature(Path(row.path)), []).append(row)
+        for group in by_content.values():
+            keep = min(group, key=lambda r: (r.source is None, r.title is None, len(r.path), r.path))
+            for row in group:
+                if row is not keep:
+                    copies.add(id(row))
+                    pairs.append((row, keep))
+    return [r for r in rows if id(r) not in copies], pairs
+
+
+def without_clap(rows: list[Song]) -> int:
+    """So viele Songs wurden ohne CLAP eingeordnet, nur nach Messwerten (ungenauer)."""
+    return sum(1 for r in rows if r.mood is not None and "clap" not in (r.features or {}).get("signals", {}))
 
 
 def _season_candidates(session: Session, season: Season, settings: Settings) -> list[Candidate]:
@@ -140,21 +179,41 @@ def _season_candidates(session: Session, season: Season, settings: Settings) -> 
     return result
 
 
-def _library_songs(session: Session) -> tuple[list[LibrarySong], int, int]:
-    """Analysierte Songs mit Stimmung, deren Datei noch da ist. Dazu: wie viele ohne Stimmung, wie viele ohne Datei."""
-    songs: list[LibrarySong] = []
+@dataclass
+class _Library:
+    songs: list[LibrarySong]
+    no_mood: int  # ohne Stimmung (einzeln mit 'song' oder 'edit' analysiert)
+    missing: int  # Datei nicht mehr da
+    copies: list[tuple[Song, Song]]  # (Kopie, behalten)
+    without_clap: int  # nur nach Messwerten eingeordnet
+
+
+def _library_songs(session: Session) -> _Library:
+    """Analysierte Songs mit Stimmung, deren Datei noch da ist, jede Datei nur einmal."""
+    rows: list[Song] = []
     no_mood = missing = 0
     for row in _list_songs(session):
         if row.mood is None or not row.analysis:
             no_mood += 1
-            continue
-        if not Path(row.path).exists():
+        elif not Path(row.path).exists():
             missing += 1
-            continue
-        songs.append(LibrarySong(path=row.path, title=row.title or Path(row.path).stem, artist=row.artist,
-                                 analysis=SongAnalysis.from_dict(row.analysis), mood=row.mood, key=row.musical_key,
-                                 features=row.features or {}))
-    return songs, no_mood, missing
+        else:
+            rows.append(row)
+    rows, copies = without_copies(rows)
+    songs = [LibrarySong(path=row.path, title=row.title or Path(row.path).stem, artist=row.artist,
+                         analysis=SongAnalysis.from_dict(row.analysis), mood=row.mood or {}, key=row.musical_key,
+                         features=row.features or {}) for row in rows]
+    return _Library(songs, no_mood, missing, copies, without_clap(rows))
+
+
+def _clap_note(count: int, total: int, settings: Settings) -> str | None:
+    """Hinweis, wenn Songs ohne CLAP eingeordnet sind: dann ist die Stimmung nur geschätzt (Messwerte)."""
+    if not count:
+        return None
+    why = ("CLAP ist in der YAML aus, music_mood.clap_enabled" if not settings.music_mood.clap_enabled else
+           "CLAP hat nicht geladen; 'music' nennt den Grund und rechnet mit CLAP nach, sobald es lädt")
+    return (f"Achtung: {count} von {total} Songs sind ohne CLAP nur nach Messwerten eingeordnet, ihre Stimmung ist "
+            f"grob geschätzt ({why}).")
 
 
 def _no_reason(s: Suggestion) -> str:
@@ -191,7 +250,8 @@ def run_suggest(args: argparse.Namespace, settings: Settings) -> Path:
         if wanted and season.characters_signature is None:
             raise ValueError(f"Die Figuren der Clips fehlen noch (Phase 5). Einmal ausführen: {index_hint(season)}")
         candidates = _season_candidates(session, season, settings)
-        songs, no_mood, missing = _library_songs(session)
+        library = _library_songs(session)
+    songs = library.songs
 
     profile: SeasonProfile = season_profile(candidates, style, title, [c.anilist_id for c in wanted])
     who = f" mit {' + '.join(c.name for c in wanted)}" if wanted else ""
@@ -202,17 +262,23 @@ def run_suggest(args: argparse.Namespace, settings: Settings) -> Path:
     long_enough = [s for s in songs if s.analysis.duration >= args.length]
     log.info("%d Songs mit Stimmung in der Datenbank, %d davon mindestens %.0f s lang", len(songs), len(long_enough),
              args.length)
-    if no_mood:
-        log.info("%d Songs ohne Stimmung zählen nicht ('music' oder 'song <Datei>' holt sie nach)", no_mood)
-    if missing:
-        log.warning("%d Songs fehlen auf der Platte (gelöscht oder verschoben?) und zählen nicht", missing)
+    if library.no_mood:
+        log.info("%d Songs ohne Stimmung zählen nicht ('music' oder 'song <Datei>' holt sie nach)", library.no_mood)
+    if library.missing:
+        log.warning("%d Songs fehlen auf der Platte (gelöscht oder verschoben?) und zählen nicht", library.missing)
+    for copy, kept in library.copies:
+        log.info("%s ist dieselbe Datei wie %s und zählt nur einmal", Path(copy.path).name, _label(kept))
+    clap_note = _clap_note(library.without_clap, len(songs), settings)
+    if clap_note:
+        log.warning("%s", clap_note)
     if not long_enough:
         raise ValueError("Keine passenden Songs. Erst die Musik analysieren, z. B.: "
                          'python -m backend.cli music --source folder --path "C:\\Musik"')
 
     top = args.top or settings.suggest.top
     result = suggest(long_enough, style, profile, settings, args.length, top)
-    lines = [f"Songvorschläge für {title}, Stil {style.name}{who} ({args.length:g}-s-Edit):", ""]
+    lines = [f"Songvorschläge für {title}, Stil {style.name}{who} ({args.length:g}-s-Edit):"]
+    lines += [clap_note, ""] if clap_note else [""]
     for number, s in enumerate(result, start=1):
         lines += suggestion_lines(number, s, args, args.length) + [""]
     if len(result) < top:

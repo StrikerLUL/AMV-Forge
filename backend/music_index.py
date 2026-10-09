@@ -116,6 +116,20 @@ def mood_is_current(row: Song | None, path: Path, settings: Settings, model_name
             and row.mood_signature == mood_signature(path, row.bpm, settings.music_mood, model_name))
 
 
+def mood_is_known(row: Song | None, path: Path, settings: Settings, models: ModelLoader) -> bool:
+    """Stimmung schon gerechnet? Ohne CLAP gerechnet zählt auch, solange CLAP weiter nicht lädt.
+
+    Dann wird CLAP einmal pro Lauf probiert: Lädt es diesmal, rechnet der Lauf die Stimmung mit CLAP nach,
+    sonst bleibt alles, wie es ist (statt bei jedem Lauf alle Songs umsonst neu zu messen).
+    """
+    wanted = models.clap_name()
+    if mood_is_current(row, path, settings, wanted):
+        return True
+    if wanted == NONE or not mood_is_current(row, path, settings, NONE):
+        return False
+    return models.clap() is None
+
+
 def analyze_one(engine: Engine, path: Path, settings: Settings, models: ModelLoader, analyzer: str | None = None,
                 force: bool = False, track: LibraryTrack | None = None,
                 report: MusicReport | None = None) -> Song:
@@ -132,7 +146,7 @@ def analyze_one(engine: Engine, path: Path, settings: Settings, models: ModelLoa
     with Session(engine) as session:
         row = _row(session, path)
         assert row is not None
-        if force or not mood_is_current(row, path, settings, models.clap_name()):
+        if force or not mood_is_known(row, path, settings, models):
             mood, key, features, model_name = analyze_mood(path, song, settings, models)
             new_signature = mood_signature(path, song.bpm, settings.music_mood, model_name)
             if force or row.mood_signature != new_signature or row.mood is None:
@@ -233,7 +247,7 @@ def index_library(
             with Session(engine) as session:
                 row = _row(session, track.local_path)
                 if (row is not None and is_current(row, track.local_path, settings.music, wanted)
-                        and mood_is_current(row, track.local_path, settings, models.clap_name())):
+                        and mood_is_known(row, track.local_path, settings, models)):
                     report.known += 1
                     if (row.title, row.source_id) != (track.title, track.source_id):  # Tags ergänzen, ohne neu zu rechnen
                         row.title, row.artist, row.album = track.title, track.artist, track.album
