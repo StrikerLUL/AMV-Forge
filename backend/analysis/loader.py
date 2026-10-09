@@ -1,6 +1,6 @@
-"""Lädt die großen Modelle erst, wenn eine Folge sie braucht (einmal pro Lauf).
+"""Lädt die großen Modelle erst, wenn eine Folge (oder ein Song) sie braucht (einmal pro Lauf).
 
-CLIP, Silero VAD, das Satz-Modell (Phase 4) und der Gesichtsdetektor (Phase 5). Fehlt ein Paket oder
+CLIP, Silero VAD, das Satz-Modell (Phase 4), der Gesichtsdetektor (Phase 5) und CLAP für Songs (Phase 7). Fehlt ein Paket oder
 scheitert das Laden (z. B. kein Internet beim ersten Download), läuft der Index ohne dieses Signal
 weiter. Beim nächsten Lauf wird es erneut versucht.
 """
@@ -15,6 +15,8 @@ import numpy as np
 from backend.analysis.audio import episode_audio
 from backend.analysis.audio.episode_audio import SileroVad, SpeechDetector
 from backend.analysis.audio.subtitles import DialogModel, SentenceDialogModel, sentence_model_installed
+from backend.analysis.music import clap as music_clap
+from backend.analysis.music.clap import AudioTextEmbedder, ClapMusicModel, MusicPrompts
 from backend.analysis.video import clip_tags, faces
 from backend.analysis.video.clip_tags import ImageTextEmbedder, OpenClipModel, PromptSet
 from backend.analysis.video.faces import FaceDetector, YoloFaceDetector
@@ -42,9 +44,11 @@ class ModelLoader:
         vad: SpeechDetector | None | _Auto = AUTO,
         dialog: DialogModel | None | _Auto = AUTO,
         faces: FaceDetector | None | _Auto = AUTO,
+        clap: AudioTextEmbedder | None | _Auto = AUTO,
     ) -> None:
         self.settings = settings
-        self._overrides: dict[str, object] = {"clip": clip, "vad": vad, "dialog": dialog, "faces": faces}
+        self._overrides: dict[str, object] = {"clip": clip, "vad": vad, "dialog": dialog, "faces": faces,
+                                              "clap": clap}
         self._loaded: dict[str, object] = {}
         self._text_embeddings: dict[str, np.ndarray] = {}
 
@@ -81,6 +85,11 @@ class ModelLoader:
         f = self.settings.faces
         return self._name("faces", f.enabled, faces.is_installed, f"{f.repo}/{f.model}", "onnxruntime", phase=5)
 
+    def clap_name(self) -> str:
+        m = self.settings.music_mood
+        return self._name("clap", m.clap_enabled, music_clap.is_installed, m.clap_model, "transformers (mit torch)",
+                          phase=7)
+
     def _get(self, kind: str, name: str, factory: Callable[[], T]) -> T | None:
         override = self._overrides[kind]
         if not isinstance(override, _Auto):
@@ -107,6 +116,15 @@ class ModelLoader:
 
     def face_detector(self) -> FaceDetector | None:
         return self._get("faces", self.detector_name(), lambda: YoloFaceDetector(self.settings.faces))
+
+    def clap(self) -> AudioTextEmbedder | None:
+        return self._get("clap", self.clap_name(), lambda: ClapMusicModel(self.settings.music_mood))
+
+    def music_text_embeddings(self, model: AudioTextEmbedder, prompts: MusicPrompts) -> np.ndarray:
+        key = signature("clap", model.name, *prompts.texts)
+        if key not in self._text_embeddings:
+            self._text_embeddings[key] = model.embed_texts(prompts.texts)
+        return self._text_embeddings[key]
 
     def text_embeddings(self, model: ImageTextEmbedder, prompts: PromptSet) -> np.ndarray:
         key = signature(model.name, *prompts.texts)

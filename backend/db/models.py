@@ -128,6 +128,18 @@ class Song(SQLModel, table=True):
     bpm: float
     analysis: dict = Field(default_factory=dict, sa_column=Column(JSON))  # SongAnalysis als JSON
     analyzed_at: datetime = Field(default_factory=_now)
+    # Phase 7: Musikbibliothek und Stimmung
+    title: Optional[str] = None
+    artist: Optional[str] = None
+    album: Optional[str] = None
+    genres: Optional[list] = Field(default=None, sa_column=Column(JSON))
+    source: Optional[str] = None  # "folder", "jellyfin" oder None (einzeln mit 'song'/'edit' analysiert)
+    source_id: Optional[str] = None  # Jellyfin-Item-ID
+    mood: Optional[dict] = Field(default=None, sa_column=Column(JSON))  # romance, action, sad, funny, calm je 0-1
+    musical_key: Optional[str] = None  # Tonart, z. B. "a-Moll"
+    # Messwerte (Tempo, Anschläge, Schlagzeug ...), Arousal/Valenz, CLAP-Ergebnis
+    features: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    mood_signature: Optional[str] = None
 
 
 class ApiCache(SQLModel, table=True):

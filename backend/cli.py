@@ -10,6 +10,8 @@ Beispiele:
     python -m backend.cli edit --season 1 --song "C:\\Musik\\song.mp3" --style romance
     python -m backend.cli characters --season 1 --show "Hori,Miyamura"
     python -m backend.cli edit --season 1 --song "C:\\Musik\\song.mp3" --characters "Hori,Miyamura"
+    python -m backend.cli music --source folder --path "C:\\Musik"
+    python -m backend.cli suggest --season 1 --style romance
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import sys
 from backend.commands.characters import add_character_commands
 from backend.commands.edit import add_edit_commands
 from backend.commands.moods import add_mood_commands
+from backend.commands.music import add_music_commands
 from backend.commands.season import add_season_commands
 from backend.commands.song import add_song_commands
 from backend.config import load_settings
@@ -37,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_song_commands(sub)
     add_mood_commands(sub)
     add_character_commands(sub)
+    add_music_commands(sub)
     return parser
 
 
@@ -50,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.verbose:
         # httpx loggt sonst jede einzelne Anfrage, numba/matplotlib/huggingface reden auch gern
         for noisy in ("httpx", "numba", "matplotlib", "huggingface_hub", "sentence_transformers", "timm",
-                      "onnxruntime"):
+                      "onnxruntime", "transformers"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
         # open_clip loggt direkt über den Root-Logger (jeder Ladeschritt), wir selbst nie
         for handler in logging.getLogger().handlers:

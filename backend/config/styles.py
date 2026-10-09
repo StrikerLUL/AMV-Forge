@@ -1,7 +1,7 @@
 """Stil-Profile aus backend/styles/*.yaml laden.
 
 Phase 4: Ziel-Stimmung, Pool und Score-Gewichte. Phase 6: Tempo (BPM-Bereich), Schnittrate pro Abschnitt,
-Übergänge, Effekte und Reihenfolge (story = chronologisch).
+Übergänge, Effekte und Reihenfolge (story = chronologisch). Phase 7: Wunsch an den Song (song: drop).
 """
 
 from __future__ import annotations
@@ -33,6 +33,8 @@ class StyleProfile:
     transitions: TransitionRules = NO_TRANSITIONS
     effects: EffectRules = NO_EFFECTS
     order: str = "score"  # score = beste Clips, chronological = in der Reihenfolge der Staffel (story)
+    # Ab Phase 7 für die Songvorschläge: Drop im Ausschnitt erwünscht (bis 1), egal (0) oder unerwünscht (bis -1)
+    song_drop: float = 0.0
 
 
 def available_styles() -> list[str]:
@@ -62,7 +64,7 @@ def load_style(name: str, defaults: ScoreWeights) -> StyleProfile:
     if unknown:
         raise ValueError(f"{path.name}: unbekanntes Gewicht {', '.join(unknown)}")
 
-    allowed = {"description", "mood", "pool", "weights", "bpm", "cuts", "transitions", "effects", "order"}
+    allowed = {"description", "mood", "pool", "weights", "bpm", "cuts", "transitions", "effects", "order", "song"}
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise ValueError(f"{path.name}: unbekannter Eintrag {', '.join(unknown)} (erlaubt: {', '.join(sorted(allowed))})")
@@ -73,7 +75,19 @@ def load_style(name: str, defaults: ScoreWeights) -> StyleProfile:
                         weights=ScoreWeights(**weights), bpm=_bpm(raw.get("bpm"), path.name),
                         cuts=_cuts(raw.get("cuts"), path.name),
                         transitions=parse_transitions(raw.get("transitions"), path.name),
-                        effects=parse_effects(raw.get("effects"), path.name), order=order)
+                        effects=parse_effects(raw.get("effects"), path.name), order=order,
+                        song_drop=_song_drop(raw.get("song"), path.name))
+
+
+def _song_drop(raw: Any, where: str) -> float:
+    song = dict(raw or {})
+    unknown = sorted(set(song) - {"drop"})
+    if unknown:
+        raise ValueError(f"{where}: unbekannter Eintrag unter song: {', '.join(unknown)} (erlaubt: drop)")
+    drop = float(song.get("drop", 0.0))
+    if not -1.0 <= drop <= 1.0:
+        raise ValueError(f"{where}: song.drop muss zwischen -1 und 1 liegen, ist {drop}")
+    return drop
 
 
 def _bpm(raw: Any, where: str) -> tuple[float, float] | None:

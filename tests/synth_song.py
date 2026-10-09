@@ -110,3 +110,28 @@ def make_song(path: Path, seed: int = 0) -> Path:
     track = track / np.max(np.abs(track)) * 0.9
     sf.write(str(path), track.astype(np.float32), SR)
     return path
+
+
+# a-Moll: Am, Dm, E (mit Gis), Am
+BALLAD_CHORDS = [(220.0, 261.63, 329.63), (146.83, 174.61, 220.0), (164.81, 207.65, 246.94), (220.0, 261.63, 329.63)]
+
+
+def make_ballad(path: Path, bpm: float = 72.0, bars: int = 14, seed: int = 0) -> Path:
+    """Ruhige Ballade in a-Moll: weiche Akkorde, leiser Schlag auf jedem Beat (damit Beats gefunden werden)."""
+    rng = np.random.default_rng(seed)
+    beat = 60.0 / bpm
+    bar = 4 * beat
+    track = np.zeros(int(bars * bar * SR) + SR)
+    soft_kick = _kick()
+    for k in range(bars):
+        t0 = k * bar
+        for f in BALLAD_CHORDS[k % 4]:
+            tone = _tone(f, bar, 2)
+            attack = np.minimum(1.0, np.arange(len(tone)) / (0.3 * SR))  # langsam einblenden wie eine Fläche
+            _add(track, tone * attack, t0, 0.08)
+        for b in range(4):
+            _add(track, soft_kick, t0 + b * beat, 0.25 if b == 0 else 0.12)
+        _add(track, _noise_hit(rng, 0.05, 0.02, True), t0 + 2 * beat, 0.01)
+    track = track / np.max(np.abs(track)) * 0.25
+    sf.write(str(path), track.astype(np.float32), SR)
+    return path

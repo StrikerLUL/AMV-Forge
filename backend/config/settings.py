@@ -267,6 +267,42 @@ class FxSettings:
 
 
 @dataclass(frozen=True)
+class MusicLibrarySettings:
+    source: str
+    audio_extensions: tuple[str, ...]
+    download_dir: Path
+    min_seconds: float
+    max_minutes: float
+
+
+@dataclass(frozen=True)
+class MusicMoodSettings:
+    weights: dict[str, float]  # features, clap
+    clap_enabled: bool
+    clap_model: str
+    device: str
+    windows: int
+    prompts: Path
+    cache_dir: Path
+    arousal: dict[str, float]
+    valence: dict[str, float]
+    ranges: dict[str, tuple[float, float]]
+    prototypes: dict[str, tuple[float, float]]  # Stimmung -> (Arousal, Valenz)
+    spread: float
+
+
+@dataclass(frozen=True)
+class SuggestSettings:
+    top: int
+    max_per_artist: int
+    weights: dict[str, float]  # mood, season, tempo, drop, material
+    tempo_tolerance: float
+    halftime_factor: float
+    drop_full: float
+    clips_per_cut: float
+
+
+@dataclass(frozen=True)
 class Settings:
     quick: QuickSettings
     scenes: SceneSettings
@@ -289,6 +325,9 @@ class Settings:
     characters: CharacterSettings
     reframe: ReframeSettings
     fx: FxSettings
+    music_library: MusicLibrarySettings
+    music_mood: MusicMoodSettings
+    suggest: SuggestSettings
 
 
 def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -357,7 +396,51 @@ def load_settings(path: Path | None = None) -> Settings:
                       for name, params in (raw["fx"]["looks"] or {}).items()},
             "cache_dir": Path(raw["fx"]["cache_dir"]),
         }),
+        music_library=MusicLibrarySettings(**{
+            **raw["music_library"],
+            "audio_extensions": tuple(e.lower() for e in raw["music_library"]["audio_extensions"]),
+            "download_dir": Path(raw["music_library"]["download_dir"]),
+        }),
+        music_mood=_music_mood(raw["music_mood"]),
+        suggest=SuggestSettings(**{**raw["suggest"],
+                                   "weights": {str(k): float(v) for k, v in raw["suggest"]["weights"].items()}}),
     )
+
+
+def _pair(value: Any, where: str) -> tuple[float, float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError(f"{where} muss zwei Zahlen haben, z. B. [60, 180]")
+    return float(value[0]), float(value[1])
+
+
+SONG_MEASURES = ("tempo", "onsets", "percussive", "brightness", "loudness")  # Messwerte aus analysis/music/mood.py
+SONG_MOODS = ("romance", "action", "sad", "funny", "calm")
+
+
+def _music_mood(raw: dict[str, Any]) -> MusicMoodSettings:
+    ranges = {str(k): _pair(v, f"music_mood.ranges.{k}") for k, v in raw["ranges"].items()}
+    for where, names, allowed in (("ranges", ranges, SONG_MEASURES), ("prototypes", raw["prototypes"], SONG_MOODS)):
+        unknown = sorted(set(names) - set(allowed))
+        if unknown:
+            raise ValueError(f"music_mood.{where}: unbekannt {', '.join(unknown)} (erlaubt: {', '.join(allowed)})")
+    for name in ("arousal", "valence"):
+        unknown = sorted(set(raw[name]) - set(ranges) - {"major"})
+        if unknown:
+            raise ValueError(f"music_mood.{name}: unbekannter Messwert {', '.join(unknown)} "
+                             f"(erlaubt: {', '.join(sorted([*ranges, 'major']))})")
+    for name, (low, high) in ranges.items():
+        if high <= low:
+            raise ValueError(f"music_mood.ranges.{name}: der zweite Wert muss größer sein als der erste")
+    return MusicMoodSettings(**{
+        **raw,
+        "weights": {str(k): float(v) for k, v in raw["weights"].items()},
+        "prompts": project_file(raw["prompts"]),
+        "cache_dir": Path(raw["cache_dir"]),
+        "arousal": {str(k): float(v) for k, v in raw["arousal"].items()},
+        "valence": {str(k): float(v) for k, v in raw["valence"].items()},
+        "ranges": ranges,
+        "prototypes": {str(k): _pair(v, f"music_mood.prototypes.{k}") for k, v in raw["prototypes"].items()},
+    })
 
 
 def _reframe(raw: dict[str, Any]) -> ReframeSettings:

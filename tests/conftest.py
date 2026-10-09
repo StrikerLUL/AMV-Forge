@@ -20,5 +20,5 @@ def no_model_downloads(monkeypatch: pytest.MonkeyPatch) -> None:
     def blocked(*_args: object, **_kwargs: object) -> object:
         raise RuntimeError("In Tests werden keine Modelle heruntergeladen")
 
-    for name in ("OpenClipModel", "SentenceDialogModel", "YoloFaceDetector"):
+    for name in ("OpenClipModel", "SentenceDialogModel", "YoloFaceDetector", "ClapMusicModel"):
         monkeypatch.setattr(f"backend.analysis.loader.{name}", blocked)

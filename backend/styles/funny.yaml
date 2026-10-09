@@ -20,6 +20,10 @@ effects:
   freeze: {zoom: 0.25, min_seconds: 1.2}
   zoom_punch: {zoom: 0.1, at: cut, zones: [chorus, drop]}
 
+# Songvorschläge (Phase 7): Drop im Ausschnitt erwünscht (bis 1) oder unerwünscht (bis -1), 0 = egal
+song:
+  drop: 0.2
+
 mood:
   funny: 1.0
   action: 0.2

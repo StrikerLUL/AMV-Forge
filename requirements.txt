@@ -26,5 +26,7 @@ sentence-transformers>=3.0
 # stattdessen onnxruntime-directml (README, Phase 5). huggingface_hub kommt schon mit open_clip.
 onnxruntime>=1.17
 
+# Phase 7: keine neuen Pakete. CLAP (Songstimmung) läuft über transformers, das mit sentence-transformers kommt.
+
 # Tests
 pytest>=8.0

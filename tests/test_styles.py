@@ -64,3 +64,12 @@ def test_bad_phase_6_entries_are_explained(tmp_path: Path, monkeypatch: pytest.M
         (tmp_path / f"{name}.yaml").write_text("mood:\n  romance: 1\n" + text, encoding="utf-8")
         with pytest.raises(ValueError):
             load_style(name, DEFAULTS)
+
+
+def test_phase_7_song_wishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert load_style("hype", DEFAULTS).song_drop > 0 > load_style("romance", DEFAULTS).song_drop
+    monkeypatch.setattr(styles, "STYLES_DIR", tmp_path)
+    for name, text in {"zu_stark": "song:\n  drop: 2\n", "unbekannt": "song:\n  tempo: 120\n"}.items():
+        (tmp_path / f"{name}.yaml").write_text("mood:\n  romance: 1\n" + text, encoding="utf-8")
+        with pytest.raises(ValueError, match="song"):
+            load_style(name, DEFAULTS)
