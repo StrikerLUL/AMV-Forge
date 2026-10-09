@@ -29,6 +29,22 @@ def settings_signature(cfg: MusicSettings) -> str:
     return hashlib.sha1(json.dumps(values, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
 
 
+def song_key(path: Path) -> str:
+    """So steht der Pfad eines Songs in der Datenbank (absolut)."""
+    return str(path.resolve())
+
+
+def is_current(row: Song, path: Path, cfg: MusicSettings, wanted: str) -> bool:
+    """Ist die gespeicherte Analyse noch gültig (gleiche Datei, gleiche Einstellungen, passender Analysator)?"""
+    stat = path.stat()
+    return (
+        (row.file_size, row.file_mtime_ns) == (stat.st_size, stat.st_mtime_ns)
+        and row.settings_signature == settings_signature(cfg)
+        and (wanted == "auto" or row.analyzer == wanted)
+        and bool(row.analysis)
+    )
+
+
 def load_song(
     engine: Engine,
     path: Path,
@@ -43,19 +59,13 @@ def load_song(
     analysieren will, nimmt --analyzer allin1 (oder --force).
     """
     wanted = analyzer or cfg.analyzer
-    key = str(path.resolve())
+    key = song_key(path)
     stat = path.stat()
     signature = settings_signature(cfg)
 
     with Session(engine) as session:
         row = session.exec(select(Song).where(Song.path == key)).first()
-        if (
-            row is not None
-            and not force
-            and (row.file_size, row.file_mtime_ns) == (stat.st_size, stat.st_mtime_ns)
-            and row.settings_signature == signature
-            and (wanted == "auto" or row.analyzer == wanted)
-        ):
+        if row is not None and not force and is_current(row, path, cfg, wanted):
             log.info("Song-Analyse aus der Datenbank: %s (%s)", path.name, row.analyzer)
             return SongAnalysis.from_dict(row.analysis)
 

@@ -302,7 +302,7 @@ def run_quick(args: argparse.Namespace, settings: Settings) -> Path:
     return _finish(args, settings, song, song_start, assignments, seed, {"video": str(args.video)})
 
 
-def _index_hint(season: Season) -> str:
+def index_hint(season: Season) -> str:
     if season.source == "folder":
         return f'python -m backend.cli index --source folder --path "{season.source_id}"'
     return f"python -m backend.cli index --source jellyfin --season {season.source_id}"
@@ -319,11 +319,11 @@ def _load_candidates(session: Session, season: Season, settings: Settings, need_
     no_motion = sorted({ep.number for _, ep in rows if ep.motion_signature is None})
     if no_motion:
         raise ValueError(f"Für Folge {', '.join(map(str, no_motion))} fehlt noch die Bewegung (neu in Phase 3). "
-                         f"Einmal ausführen: {_index_hint(season)}")
+                         f"Einmal ausführen: {index_hint(season)}")
     if need_mood and (season.mood_signature is None or any(clip.mood is None for clip, _ in rows)):
-        raise ValueError(f"Die Stimmung der Clips fehlt noch (neu in Phase 4). Einmal ausführen: {_index_hint(season)}")
+        raise ValueError(f"Die Stimmung der Clips fehlt noch (neu in Phase 4). Einmal ausführen: {index_hint(season)}")
     if need_characters and season.characters_signature is None:
-        raise ValueError(f"Die Figuren der Clips fehlen noch (neu in Phase 5). Einmal ausführen: {_index_hint(season)}")
+        raise ValueError(f"Die Figuren der Clips fehlen noch (neu in Phase 5). Einmal ausführen: {index_hint(season)}")
 
     missing: set[int] = set()
     dropped: Counter[str] = Counter()
@@ -366,12 +366,12 @@ def _log_moods(assignments: list[Assignment], candidates: list[Candidate], style
                  overall)
 
 
-def _resolve_characters(session: Session, season: Season, settings: Settings, text: str) -> list[Character]:
+def resolve_characters(session: Session, season: Season, settings: Settings, text: str) -> list[Character]:
     """--characters "Hori,Miyamura" -> die passenden Figuren der Staffel (Teil des Namens reicht)."""
     known = season_characters(session, season, settings.characters.roles)
     if not known:
         raise ValueError("Für diese Staffel sind keine Figuren von AniList gespeichert (Lauf mit --no-api?). "
-                         f"Einmal ausführen: {_index_hint(season)}")
+                         f"Einmal ausführen: {index_hint(season)}")
     return pick_characters(text, known)
 
 
@@ -423,7 +423,7 @@ def run_edit(args: argparse.Namespace, settings: Settings) -> Path:
         season = session.get(Season, args.season)
         if season is None:
             raise ValueError(f"Keine Staffel mit DB-ID {args.season}. 'status' zeigt alle.")
-        wanted = _resolve_characters(session, season, settings, args.characters) if args.characters else []
+        wanted = resolve_characters(session, season, settings, args.characters) if args.characters else []
         candidates = _load_candidates(session, season, settings, need_mood=style is not None,
                                       need_characters=bool(wanted))
         names = _character_names(session, season)

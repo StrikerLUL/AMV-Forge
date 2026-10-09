@@ -1,0 +1,35 @@
+# Sätze für CLAP, die Bilderkennung CLIP für Musik (Phase 7).
+#
+# CLAP hört sich mehrere 10-Sekunden-Stücke jedes Songs an und vergleicht sie mit allen Sätzen auf einmal.
+# Pro Stimmung zählt die durchschnittliche Wahrscheinlichkeit ihrer Sätze. Die Sätze sind Englisch, weil
+# CLAP mit englischen Beschreibungen trainiert wurde.
+#
+# Nach dem Ändern reicht ein neuer 'music'-Lauf: Die Songs sind schon als Embeddings gespeichert,
+# es wird nur neu verglichen (Sekunden statt Minuten).
+
+moods:
+  romance:
+    - "a romantic love song"
+    - "a tender love ballad with soft vocals"
+    - "a sweet and dreamy pop song about falling in love"
+    - "warm and gentle romantic music"
+  action:
+    - "aggressive energetic rock music"
+    - "intense electronic dance music with a heavy drop"
+    - "epic powerful battle music"
+    - "fast hard-hitting music with loud drums"
+  sad:
+    - "a sad and melancholic song"
+    - "a slow emotional piano ballad about heartbreak"
+    - "sorrowful music that makes you cry"
+    - "lonely and depressing music"
+  funny:
+    - "happy cheerful upbeat pop music"
+    - "playful and silly music"
+    - "bouncy fun music with a catchy melody"
+    - "lighthearted comedic music"
+  calm:
+    - "calm relaxing ambient music"
+    - "peaceful quiet acoustic music"
+    - "soft lo-fi music to relax"
+    - "gentle soothing instrumental music"

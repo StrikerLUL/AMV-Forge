@@ -29,6 +29,10 @@ effects:
   slowmo: {speed: 0.8, min_seconds: 1.0}    # leichtes Slow-Mo
   push_in: {zoom: 0.05, min_seconds: 1.5}   # langsam ans Gesicht ranzoomen
 
+# Songvorschläge (Phase 7): Drop im Ausschnitt erwünscht (bis 1) oder unerwünscht (bis -1), 0 = egal
+song:
+  drop: -0.3       # lieber ohne harten Drop
+
 # Ziel-Stimmung: positiv = erwünscht, negativ = unerwünscht (je -1 bis 1)
 mood:
   romance: 1.0

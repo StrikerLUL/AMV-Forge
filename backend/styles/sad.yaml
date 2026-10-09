@@ -23,6 +23,10 @@ effects:
   slowmo: {speed: 0.75, min_seconds: 1.5}
   push_in: {zoom: 0.04, min_seconds: 2.0}
 
+# Songvorschläge (Phase 7): Drop im Ausschnitt erwünscht (bis 1) oder unerwünscht (bis -1), 0 = egal
+song:
+  drop: -0.5
+
 mood:
   sad: 1.0
   calm: 0.4

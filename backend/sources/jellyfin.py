@@ -12,6 +12,7 @@ import httpx
 from dotenv import load_dotenv
 
 from backend.sources.base import SourceEpisode, SourceSeason
+from backend.sources.music import LibraryTrack, safe_filename
 
 log = logging.getLogger(__name__)
 
@@ -95,13 +96,14 @@ class JellyfinClient:
         )
         return data.get("Items", [])
 
-    def download(self, item_id: str, target: Path) -> Path:
+    def download(self, item_id: str, target: Path, progress: bool = True) -> Path:
         """Lädt die Originaldatei einmal herunter. Existiert sie schon, passiert nichts."""
         if target.exists():
             return target
         target.parent.mkdir(parents=True, exist_ok=True)
         part = target.with_suffix(target.suffix + ".part")
-        log.info("Lade %s herunter ...", target.name)
+        if progress:
+            log.info("Lade %s herunter ...", target.name)
         try:
             with self._http.stream("GET", f"/Items/{item_id}/Download", timeout=None) as response:
                 if response.status_code == 403:
@@ -114,7 +116,7 @@ class JellyfinClient:
                     for chunk in response.iter_bytes(chunk_size=1 << 20):
                         fh.write(chunk)
                         done += len(chunk)
-                        if total and done / total >= next_log:
+                        if progress and total and done / total >= next_log:
                             log.info("  %s: %d %%", target.name, int(done / total * 100))
                             next_log += 0.1
         except httpx.TransportError as exc:
@@ -162,3 +164,51 @@ class JellyfinClient:
             anilist_id=anilist_id,
             mal_id=mal_id,
         )
+
+    # ------------------------------------------------------------ Phase 7: Musikbibliothek
+
+    def music_libraries(self) -> list[dict[str, Any]]:
+        """Bibliotheken vom Typ Musik (Dashboard > Bibliotheken)."""
+        items = self._get("/Library/MediaFolders").get("Items", [])
+        return [i for i in items if str(i.get("CollectionType") or "").lower() == "music"]
+
+    def audio_items(self, parent_id: str | None = None, search: str | None = None, genre: str | None = None,
+                    page: int = 500) -> list[dict[str, Any]]:
+        """Alle Songs (Typ Audio), seitenweise abgeholt."""
+        items: list[dict[str, Any]] = []
+        while True:
+            data = self._get("/Items", includeItemTypes="Audio", recursive="true", parentId=parent_id,
+                             searchTerm=search, genres=genre, fields="Path,MediaSources,Genres",
+                             sortBy="SortName", startIndex=len(items), limit=page)
+            batch = data.get("Items", [])
+            items += batch
+            if not batch or len(items) >= int(data.get("TotalRecordCount") or 0):
+                return items
+
+    def music_tracks(self, download_dir: Path, library: str | None = None, search: str | None = None,
+                     genre: str | None = None) -> list[LibraryTrack]:
+        """Songs aus Jellyfin. Die Dateien werden erst geladen, wenn ein Song analysiert wird."""
+        parent_id = None
+        if library:
+            libraries = self.music_libraries()
+            found = [lib for lib in libraries if library.lower() in (str(lib.get("Name", "")).lower(), lib["Id"])]
+            if not found:
+                names = ", ".join(str(lib.get("Name")) for lib in libraries) or "keine"
+                raise JellyfinError(f"Keine Musikbibliothek '{library}' in Jellyfin. Vorhanden: {names}")
+            parent_id = found[0]["Id"]
+        tracks = []
+        for item in self.audio_items(parent_id, search, genre):
+            artist = item.get("AlbumArtist") or ", ".join(item.get("Artists") or []) or None
+            title = item.get("Name") or item["Id"]
+            container = str(item.get("Container") or "").split(",")[0]
+            suffix = Path(item.get("Path") or "").suffix or (f".{container}" if container else ".mp3")
+            name = safe_filename(f"{artist} - {title}" if artist else title)
+            target = download_dir / f"{name}_{item['Id'][:8]}{suffix.lower()}"
+            ticks = item.get("RunTimeTicks")
+            tracks.append(LibraryTrack(
+                title=title, artist=artist, album=item.get("Album"), genres=list(item.get("Genres") or []),
+                duration=ticks / 10_000_000 if ticks else None,  # Jellyfin zählt in 100-ns-Schritten
+                local_path=target if target.exists() else None, source="jellyfin", source_id=item["Id"],
+                fetch=partial(self.download, item["Id"], target, False), tagged=True,
+            ))
+        return tracks

@@ -3,7 +3,7 @@
 Aus einer Anime-Staffel und einem Song automatisch ein beat-synchrones 9:16-Edit für TikTok schneiden.
 Die komplette Projektbeschreibung und Roadmap steht in [CLAUDE.md](CLAUDE.md).
 
-## Stand: Phase 6 (Stil-Profile, Effekte, 9:16-Reframe)
+## Stand: Phase 7 (Songvorschläge)
 
 - **Phase 1, `quick`:** Eine Folge + ein Song → 9:16-MP4, jeder Schnitt exakt auf dem Beat.
 - **Phase 2, `index`:** Eine ganze Staffel (aus einem Ordner oder aus Jellyfin) wird einmal analysiert und landet in `data/amv_forge.sqlite`: Folgen, Szenen ohne Opening/Ending/Recap, Metadaten und Charaktere von AniList, Filler-Markierung von Jikan. Ein zweiter Lauf berechnet nichts neu.
@@ -12,6 +12,7 @@ Die komplette Projektbeschreibung und Roadmap steht in [CLAUDE.md](CLAUDE.md).
 - **Phase 5, Figuren und `--characters`:** `index` sucht jetzt in jedem Clip Anime-Gesichter und ordnet sie den Figuren von AniList zu. `edit --characters "Hori,Miyamura"` nimmt dann zuerst Szenen, in denen beide zu sehen sind. `characters` zeigt, wer wie oft erkannt wurde, mit Kontaktbögen der Gesichter zum Prüfen.
 - **Streuung (nach Phase 5):** Aus jeder Minute einer Folge kommen höchstens 2 Clips ins Edit, und Folgen, die schon deutlich öfter dran waren als der Durchschnitt, bekommen einen Abzug. Ein Edit erzählt so nicht mehr eine einzelne Kampfszene nach.
 - **Phase 6, Stil-Profile, Effekte und Smart Reframe:** Jeder Stil (`romance`, `hype`, `sad`, `funny`, neu `story`) bringt jetzt sein eigenes Tempo, seine Schnittrate, Übergänge (Crossfade, Dip to White, Flash, Whip …), Effekte (Slow-Mo, Speed-Ramps, Zoom-Punch, Shake, Freeze-Frame) und einen Farblook mit. Der 9:16-Ausschnitt folgt den Gesichtern aus Phase 5 bzw. der Bewegung, statt stumpf die Mitte zu nehmen. Ein Kontaktbogen zeigt pro Clip, wo der Ausschnitt liegt.
+- **Phase 7, `music` und `suggest`:** Die eigene Musik (ein Ordner oder die Jellyfin-Musikbibliothek) wird einmal analysiert: Tempo, Abschnitte und Drops wie in Phase 3, dazu Stimmung (romance, action, sad, funny, calm, wie bei den Clips) und Tonart. `suggest --season 1 --style romance` zeigt dann die 5 Songs, die am besten zu den Romance-Szenen der Staffel passen, jeweils mit Begründung, Einwänden und dem fertigen `edit`-Befehl zum Kopieren.
 
 ### So läuft `quick` (Phase 1)
 
@@ -86,6 +87,23 @@ Wenn sich Wünsche widersprechen, gilt: gewünschte Figuren vor Stil vor Streuun
 6. **Farblook** (`backend/render/looks.py`): Ein Look ist eine **3D-LUT**, eine Tabelle „aus dieser Farbe wird jene“ für ein Raster von 17×17×17 Farben, ffmpeg rechnet für jeden Pixel dazwischen. Die Looks `warm`, `punchy`, `cold`, `bright` und `film` stehen als Zahlen (Wärme, Sättigung, Kontrast …) unter `fx.looks` in `default.yaml`, das Tool schreibt daraus `.cube`-Dateien nach `data/cache/looks/`. Eigene `.cube`-Dateien (z. B. aus DaVinci Resolve) gehen auch. Dazu kommen **Soft Glow** (eine unscharfe Kopie des Bilds wird hell darübergelegt) und **Vignette** (dunklere Ecken).
 7. **Smart Reframe** (`backend/render/reframe.py`): Aus einem 16:9-Bild passt nur knapp ein Drittel der Breite ins 9:16-Format. Wo dieses Drittel liegt, entscheiden die Gesichter aus Phase 5 (mit `--characters` die gewünschten Figuren, sonst alle großen Gesichter): Passen sie zusammen rein, kommt der Ausschnitt in ihre Mitte; bewegen sie sich zwischen den Standbildern, wandert er mit; stehen zwei zu weit auseinander, schwenkt er in Clips ab 1,2 s langsam vom einen zum anderen, in kürzeren bleibt er auf dem wichtigsten Gesicht. Ohne Gesichter folgt er dem **Bewegungsschwerpunkt**: Optical Flow wie in Phase 3, davon wird die Bewegung der Kamera abgezogen (der Median aller Bewegungen), übrig bleibt, was sich selbst bewegt. Sonst die Mitte.
 8. **Rendern** (`backend/render/ffmpeg_graph.py`): Jeder Clip ist weiterhin ein eigenes, frame-genaues Stück. Neu darin: `setpts` (Tempo), `crop` mit wanderndem x (Reframe), `zoompan` (Zooms), bewegter `crop` (Shake), `lut3d` (Look), `xfade` (Überblendungen) und `fade` (Flash, Dips). Die Länge bleibt Frame für Frame gleich, jeder Schnitt liegt weiter auf dem Beat.
+
+### So laufen Songvorschläge (Phase 7)
+
+1. **Songs holen** (`backend/sources/music.py`, `backend/sources/jellyfin.py`): Im Ordner-Modus zählen alle MP3/FLAC/WAV/M4A/OGG/OPUS/AAC-Dateien, auch in Unterordnern. Titel, Interpret, Album und Genre kommen aus den Tags der Datei (ffprobe), fehlen sie, aus dem Dateinamen („LiSA - Gurenge.mp3“). Aus Jellyfin kommen alle Songs (Typ Audio) mit Tags und Länge über die API, die Datei wird erst heruntergeladen, wenn der Song analysiert wird (nach `data/cache/music/`). Songs unter 45 Sekunden (Jingles, Intros) und über 12 Minuten (Mixe) fallen raus.
+2. **Struktur** wie in Phase 3 (`backend/songs.py`): Tempo, Beats, Abschnitte, Drops, Energiekurve. Was `song` oder `edit` schon analysiert haben, wird nicht neu gerechnet.
+3. **Messwerte und Arousal/Valenz** (`backend/analysis/music/mood.py`): Psychologen beschreiben Stimmungen gern mit zwei Achsen. *Arousal* ist, wie aufgeregt etwas klingt (ruhig … energiegeladen), *Valenz*, wie angenehm (traurig … fröhlich). Arousal kommt aus Tempo, Anschlägen pro Sekunde, dem Anteil Schlagzeug (HPSS trennt das Spektrogramm in stehende Töne und kurze Schläge), der Helligkeit des Klangs und der Lautstärke, Valenz vor allem aus Dur oder Moll. Jede Stimmung hat einen Platz in diesem Feld (Action: aufgeregt, eher fröhlich; Sad: ruhig, düster …), je näher der Song daran liegt, desto stärker die Stimmung.
+4. **Tonart** (`backend/analysis/music/key.py`): Pro Halbton wird gemessen, wie viel davon im Song vorkommt (Chroma). Diese 12 Werte werden mit typischen Profilen aller 24 Dur- und Moll-Tonarten verglichen (Krumhansl-Schmuckler), die ähnlichste gewinnt. Die Tonart steht in der Ausgabe („a-Moll“) und zählt über Dur/Moll für die Valenz.
+5. **CLAP** (`backend/analysis/music/clap.py`): CLAP („Contrastive Language-Audio Pretraining“) ist CLIP für Ton. Ein Modell rechnet Audio und Sätze in denselben Zahlenraum um (ein *Embedding*), ein Song und eine passende Beschreibung landen nah beieinander. Das Tool hört sich 6 Stücke à 10 Sekunden aus jedem Song an (verteilt, ohne die ersten und letzten 10 %) und vergleicht sie mit den Sätzen aus `backend/prompts/music_prompts.yaml` („a tender love ballad with soft vocals“, „epic powerful battle music“ …). Das Modell ist [laion/larger_clap_music](https://huggingface.co/laion/larger_clap_music), es läuft über `transformers`, das mit dem Satz-Modell aus Phase 4 schon installiert ist. Die Embeddings liegen in `data/cache/clap_music/`, neue Sätze brauchen deshalb kein neues Anhören.
+6. **Stimmung** (`backend/music_index.py`): Messwerte (Gewicht 0,4) und CLAP (1,0) werden gemischt, wie die Signale der Clips in Phase 4. Ohne CLAP zählen nur die Messwerte. Jeder Song merkt sich einen Fingerabdruck aus Datei, Einstellungen, CLAP-Modell und Sätzen, ein zweiter Lauf rechnet nichts neu. Kaputte Dateien landen in `data/cache/music/failed.json` und werden beim nächsten Lauf übersprungen.
+7. **Vorschläge** (`backend/planner/suggest.py`): Für jeden Song wird der Ausschnitt gewählt, den `edit` nehmen würde (stärkster Drop bei 40 %, Tempo halb/doppelt wie in Phase 6). Dann gibt es fünf Teilnoten von 0 bis 1:
+   - **Stimmung:** Passt die Stimmung des Songs zur Ziel-Stimmung des Stils (`mood:` in `backend/styles/<stil>.yaml`)?
+   - **Staffel:** Klingt der Song wie die Szenen der Staffel, die für den Stil in Frage kommen (dieselben 30 % wie bei `edit`)? Verglichen wird nur die Form (welche Stimmungen über dem Durchschnitt liegen), weil Clips und Songs verschieden gemessen werden.
+   - **Tempo:** Liegt der Song im BPM-Bereich des Stils? Halbes oder doppeltes Tempo gibt etwas Abzug, 40 % daneben zählt nichts mehr.
+   - **Drop:** Liegt ein Drop im Ausschnitt? Hype will einen (`song: drop: 1.0` im Stil), Romance und Sad lieber nicht (−0,3 bzw. −0,5).
+   - **Material:** Gibt es genug passende Clips für die Schnitte (2 pro Schnitt)? Wichtig mit `--characters`.
+
+   Der gewichtete Mittelwert ist „passt zu X %“. Gute Teilnoten werden als Gründe genannt, schwache als Einwände. Höchstens 2 Songs pro Interpret, damit die Liste nicht nur aus einem Album besteht.
 
 ## Installation (Windows)
 
@@ -387,6 +405,83 @@ Alles steht in `backend/styles/<stil>.yaml` (kommentiert) und unter `reframe:` u
 | `reframe.margin`, `min_face_share` | Abstand der Gesichter zum Rand, ab welcher Größe ein Gesicht zählt |
 
 Ein Tippfehler in einer Stil-Datei (z. B. `dorp:` statt `drop:`) bricht mit einer Meldung ab, die sagt, was erlaubt ist.
+
+## Benutzung: Songvorschläge (Phase 7)
+
+Nichts neu zu installieren. Beim ersten Lauf lädt das Tool das CLAP-Modell von Hugging Face (etwa 0,8 GB, einmalig, landet in `%USERPROFILE%\.cache\huggingface`). Klappt das nicht (kein Internet, `transformers` fehlt), läuft alles ohne CLAP weiter, nur mit den Messwerten, und beim nächsten Lauf wird es erneut versucht.
+
+### Musik analysieren (einmal, dann nur neue Songs)
+
+Aus einem Ordner (Unterordner zählen mit):
+
+```bat
+python -m backend.cli music --source folder --path "C:\Users\cilli\Music"
+```
+
+Oder aus Jellyfin (URL und API-Key aus der `.env` wie in Phase 2; der Jellyfin-Benutzer braucht die Download-Berechtigung):
+
+```bat
+python -m backend.cli music --source jellyfin --limit 40
+```
+
+| Option | Wirkung |
+| --- | --- |
+| `--limit 40` | höchstens 40 neue Songs pro Lauf, der Rest beim nächsten Mal (große Bibliotheken) |
+| `--library Musik` | nur diese Jellyfin-Bibliothek (Standard: alle Songs in Jellyfin) |
+| `--search LiSA` | nur Songs, deren Interpret, Titel, Album oder Dateiname das enthält |
+| `--genre Pop` | nur Songs mit diesem Genre (ein Teil reicht) |
+| `--list` | nichts analysieren, nur alle Songs mit Tempo, Tonart und Stimmung zeigen |
+| `--force` | alles neu analysieren |
+
+Ein einzelner Song geht wie bisher mit `song`, der zeigt jetzt auch Tonart und Stimmung (Zahlen als Beispiel):
+
+```bat
+python -m backend.cli song song.mp3
+```
+
+```
+Tonart: a-Moll | Stimmung: romance 0.81, calm 0.62, sad 0.55, funny 0.31, action 0.12
+Messwerte: 2.1 Anschläge/s, Schlagzeug 18 %, Helligkeit 1450 Hz, Lautstärke -11.2 dBFS, Dur 0.31 -> Arousal 0.28, Valenz 0.38 (ruhig, eher traurig/düster)
+CLAP: am ähnlichsten "a tender love ballad with soft vocals" (romance 0.92, calm 0.60, sad 0.48)
+```
+
+### Vorschläge holen
+
+```bat
+python -m backend.cli suggest --season 1 --style romance
+```
+
+```
+Horimiya, Stil romance: 1520 von 5066 Clips kommen in Frage
+Stimmung dieser Clips: romance 0.71, calm 0.66, sad 0.41, funny 0.38, action 0.22
+1. Duo - Slow Love (04:52.3) | 82 BPM, Es-Dur | romance 0.84, calm 0.63 | passt zu 81 %
+   Warum: klingt romantisch und ruhig wie die romance-Szenen von Horimiya (CLAP: "a tender love ballad with soft vocals"); 82 BPM passt zu romance (70-100)
+   Ausschnitt 01:12.4 bis 01:42.4, 14 Schnitte
+   python -m backend.cli edit --season 1 --style romance --song "C:\Users\cilli\Music\Duo - Slow Love.mp3"
+...
+```
+
+(Song und Zahlen sind ein Beispiel.) Die Liste steht zusätzlich in `data\renders\vorschlaege_s1_romance.txt`, die letzte Zeile jedes Vorschlags ist der fertige `edit`-Befehl.
+
+| Option | Wirkung |
+| --- | --- |
+| `--top 10` | mehr Vorschläge (Standard 5) |
+| `--length 45` | für ein 45-s-Edit (Ausschnitt, Schnitte und Material werden dafür berechnet; der `edit`-Befehl bekommt `--length 45`) |
+| `--characters "Hori,Miyamura"` | zählt nur die Szenen mit beiden; wenig Material wird als Einwand genannt |
+
+### Nachjustieren ohne Code
+
+| Wo | Was |
+| --- | --- |
+| `backend/prompts/music_prompts.yaml` | die Sätze für CLAP pro Stimmung (Englisch); danach reicht ein neuer `music`-Lauf, der nur neu vergleicht |
+| `music_mood.weights` | wie stark Messwerte und CLAP zählen (`clap: 0` = ohne CLAP) |
+| `music_mood.arousal`, `valence`, `ranges`, `prototypes` | woraus Arousal und Valenz kommen und wo jede Stimmung im Feld liegt |
+| `music_library` | Dateiendungen, Mindest- und Höchstlänge, Download-Ordner für Jellyfin |
+| `suggest.weights` | wie wichtig Stimmung, Staffel, Tempo, Drop und Material für den Vorschlag sind |
+| `suggest.max_per_artist`, `top` | höchstens so viele Songs pro Interpret, so viele Vorschläge |
+| Stil → `song: drop:` | ob der Stil einen Drop will (1 = unbedingt, −1 = auf keinen Fall, 0 = egal) |
+
+Spotify wird nicht benutzt: Dessen Audio-Analyse ist für neue Apps seit November 2024 gesperrt, deshalb läuft alles lokal auf deinen Dateien.
 
 ## Tests
 
