@@ -41,6 +41,39 @@ class Face:
         return self.box[3] - self.box[1]
 
 
+@dataclass(frozen=True)
+class ClipFace:
+    """Ein gefundenes Gesicht aus der Datenbank (Clip.faces): wann, wo und wer. Braucht der Reframe (Phase 6)."""
+
+    time: float  # Sekunden in der Folge
+    box: tuple[float, float, float, float]  # x0, y0, x1, y1 als Anteil von Bildbreite und -höhe (0-1)
+    character: int | None = None  # AniList-ID oder None (unbekannt)
+    probability: float = 0.0
+
+    @property
+    def center_x(self) -> float:
+        return (self.box[0] + self.box[2]) / 2
+
+    @property
+    def center_y(self) -> float:
+        return (self.box[1] + self.box[3]) / 2
+
+    @property
+    def height(self) -> float:
+        return self.box[3] - self.box[1]
+
+    @staticmethod
+    def from_db(rows: list | None) -> tuple["ClipFace", ...] | None:
+        """[{"t", "box", "char", "p", ...}] aus Clip.faces. None bleibt None (noch nicht gesucht)."""
+        if rows is None:
+            return None
+        return tuple(
+            ClipFace(float(r["t"]), (float(r["box"][0]), float(r["box"][1]), float(r["box"][2]), float(r["box"][3])),
+                     int(r["char"]) if r.get("char") is not None else None, float(r.get("p") or 0.0))
+            for r in rows
+        )
+
+
 class FaceDetector(Protocol):
     """Alles, was in einem RGB-Bild Gesichter findet (das echte YOLO oder ein Test-Ersatz)."""
 

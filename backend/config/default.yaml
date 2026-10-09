@@ -284,3 +284,51 @@ characters:
   scale: 50
   # Ab dieser Sicherheit gilt ein Gesicht als die Figur, sonst als "unbekannt"
   min_probability: 0.6
+
+# ---------------------------------------------------------------- Phase 6: Reframe, Übergänge, Effekte
+
+reframe:
+  # smart = der 9:16-Ausschnitt folgt den Gesichtern (Phase 5), ohne Gesichter dem Bewegungsschwerpunkt.
+  # center = immer die Mitte (wie bis Phase 5). Für einen Lauf auch per --center.
+  mode: smart
+  # So viel Abstand halten die Gesichter zum Rand des 9:16-Bilds (Anteil seiner Breite)
+  margin: 0.02
+  # Gesichter, die kleiner als dieser Anteil des größten Gesichts im Clip sind, zählen nicht (Leute im Hintergrund)
+  min_face_share: 0.5
+  # Passen die wichtigen Gesichter nicht zusammen ins 9:16-Bild (Paar steht weit auseinander):
+  #   pan  = langsamer Schwenk vom einen zum anderen (nur in Clips ab pan_min_seconds, sonst wie main)
+  #   main = auf das wichtigste Gesicht (gewünschte Figur aus --characters, sonst das größte)
+  #   fit  = ganzes 16:9-Bild in die Mitte, oben und unten unscharf aufgefüllt
+  too_wide: pan
+  pan_min_seconds: 1.2
+  # Ohne Gesichter: Bewegungsschwerpunkt (Optical Flow ohne Kamerabewegung). Ist kaum Bewegung da, Mitte.
+  motion_min: 0.15
+  # Kontaktbogen <edit>.reframe.jpg: pro Clip das 16:9-Bild mit dem 9:16-Ausschnitt und den Gesichtern
+  sheet: true
+
+fx:
+  # Wie die Übergänge und Effekte aus den Stilen (backend/styles/*.yaml) genau aussehen
+  flash_seconds: 0.15        # Flash: so lange blendet es von Weiß ins neue Bild
+  whip_seconds: 0.2          # Whip: so lange dauert der Wisch-Schwenk
+  whip_blur: 0.05            # Bewegungsunschärfe beim Whip (Anteil der Bildbreite)
+  max_transition_share: 0.5  # ein Übergang ist höchstens so lang wie dieser Anteil des kürzeren Clips
+  punch_seconds: 0.25        # so schnell geht der Zoom-Punch zurück
+  shake_speed: 9.0           # wie schnell das Bild beim Shake wackelt (Schwingungen pro Sekunde)
+  freeze_min_seconds: 0.35   # kürzer wird nicht eingefroren
+  glow_blur: 0.02            # Weichzeichner für den Glow (Anteil der Bildhöhe)
+  # Farblooks: werden als 3D-LUT (.cube) nach cache_dir geschrieben und mit ffmpeg lut3d angewendet.
+  # Ein Stil kann statt eines Namens auch eine eigene .cube-Datei angeben (z. B. aus DaVinci).
+  #   warmth     -1 (kalt, blau) bis 1 (warm, orange)
+  #   tint       -1 (grün) bis 1 (magenta)
+  #   saturation 0 = schwarzweiß, 1 = unverändert, 1.3 = kräftiger
+  #   contrast   1 = unverändert, 1.2 = mehr Kontrast
+  #   brightness -0.2 bis 0.2
+  #   lift       hebt das Schwarz an (blasser Film-Look), 0-0.2
+  looks:
+    warm:  {warmth: 0.3, saturation: 1.08, contrast: 1.03, brightness: 0.02, lift: 0.03}
+    punchy: {warmth: 0.05, saturation: 1.3, contrast: 1.15}
+    cold:  {warmth: -0.25, saturation: 0.55, contrast: 0.95, brightness: -0.02, lift: 0.05}
+    bright: {saturation: 1.15, contrast: 1.05, brightness: 0.03}
+    film:  {warmth: 0.08, saturation: 0.9, contrast: 1.05, lift: 0.06}
+  lut_size: 17
+  cache_dir: data/cache/looks

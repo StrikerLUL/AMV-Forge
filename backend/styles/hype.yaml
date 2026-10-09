@@ -1,8 +1,32 @@
 # Stil "Hype": viel Bewegung, Kämpfe, Explosionen, Geschrei.
-# Phase 4 nutzt nur mood, pool und weights. BPM-Bereich, Schnittrate, Übergänge und Effekte
-# kommen in Phase 6 dazu.
 
 description: Action, hohe Bewegung, laute Szenen
+
+# Für dieses Tempo sind die Schnittraten gedacht (ein 90-BPM-Song wird im doppelten Tempo gezählt)
+bpm: [140, 175]
+
+# Schnittrate: Build-up 1 pro Takt -> 1 pro Beat, Drop 1 pro halben Beat
+cuts:
+  beats_per_cut: {intro: 2, verse: 2, chorus: 1, bridge: 2, outro: 2}
+  drop: 0.5
+  drop_bars: 4
+  buildup_bars: 4
+  buildup_from: 4
+  buildup_to: 1
+
+# Harte Schnitte, Flash auf jedem Taktanfang und im Drop, Whip beim Wechsel des Abschnitts
+transitions:
+  default: cut
+  downbeat: flash
+  section: whip
+  drop: flash
+
+effects:
+  look: punchy
+  zoom_punch: {zoom: 0.12, at: downbeats, zones: [buildup, chorus, drop]}   # kurz ranzoomen auf der Eins
+  shake: {strength: 0.015, zones: [drop]}
+  # Speed-Ramp: direkt nach dem Schnitt (dort liegt der Bewegungs-Peak) Zeitlupe, dann schneller
+  speed_ramp: {slow: 0.5, fast: 1.6, split: 0.4, zones: [intro, verse, bridge, outro, buildup], min_seconds: 0.6}
 
 mood:
   action: 1.0

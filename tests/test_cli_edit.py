@@ -94,19 +94,40 @@ def test_romance_and_hype_pick_different_scenes(tmp_path: Path, monkeypatch: pyt
     assert (tmp_path / "data" / "renders" / "stimmung_s1_romance.jpg").is_file()
 
     episodes: dict[str, list[int]] = {}
-    for style in ("romance", "hype"):
+    plans: dict[str, dict] = {}
+    for style in ("romance", "hype", "story"):
         out = tmp_path / f"{style}.mp4"
         assert main(["edit", "--season", "1", "--song", str(synth_song), "--length", "8", "--preview",
                      "--seed", "5", "--analyzer", "librosa", "--style", style, "--out", str(out), *common]) == 0
         plan = json.loads(out.with_suffix(".plan.json").read_text(encoding="utf-8"))
         assert plan["style"] == style and all(clip["mood"] for clip in plan["clips"])
+        assert out.with_suffix(".reframe.jpg").is_file()
         episodes[style] = [clip["episode"] for clip in plan["clips"]]
+        plans[style] = plan
 
     def share(style: str, episode: int) -> float:
         return episodes[style].count(episode) / len(episodes[style])
 
     # Nur 8 Szenen pro Folge und höchstens 2 hintereinander aus derselben Folge, daher "deutlich mehr"
     assert share("romance", 1) > 0.6 and share("hype", 2) > 0.6
+
+    # Phase 6: Romance schneidet langsamer (128 BPM werden im halben Tempo gezählt) und blendet über,
+    # Hype schneidet hart mit Flash und Whip
+    romance, hype = plans["romance"], plans["hype"]
+    assert (romance["tempo_factor"], hype["tempo_factor"]) == (2.0, 1.0)
+    assert len(romance["clips"]) * 2 <= len(hype["clips"])
+    assert (romance["look"], hype["look"]) == ("warm", "punchy")
+    romance_cuts = {clip["transition"] for clip in romance["clips"][1:]}
+    hype_cuts = {clip["transition"] for clip in hype["clips"][1:]}
+    assert romance_cuts & {"crossfade", "dip_white"} and romance_cuts <= {"crossfade", "dip_white", "cut"}
+    assert hype_cuts <= {"cut", "flash", "whip"}
+    assert any(e.startswith("tempo 0.5x>1.6x") for clip in hype["clips"] for e in clip["effects"])
+    # Ohne Gesichter folgt der Ausschnitt in den bewegten blauen Szenen der Bewegung
+    modes = {clip["framing"]["mode"] for clip in hype["clips"] if clip["episode"] == 2}
+    assert modes <= {"motion", "center"} and "motion" in modes
+
+    story = [(clip["episode"], clip["source_start"]) for clip in plans["story"]["clips"]]
+    assert story == sorted(story)  # Story: in der Reihenfolge der Staffel
 
 
 def test_style_needs_the_phase_4_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, synth_song: Path) -> None:

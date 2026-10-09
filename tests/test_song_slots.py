@@ -7,9 +7,19 @@ import pytest
 from backend.analysis.music.energy import Drop
 from backend.analysis.music.structure import Section, SongAnalysis
 from backend.config import load_settings
-from backend.planner.song_slots import build_song_slots, choose_edit_start, ramp, summarize, zones_per_beat
+from backend.config.styles import load_style
+from backend.planner.song_slots import (
+    build_song_slots,
+    choose_edit_start,
+    ramp,
+    style_cuts,
+    summarize,
+    tempo_factor,
+    zones_per_beat,
+)
 
 CUTS = load_settings().cuts
+WEIGHTS = load_settings().planner.weights
 
 
 def make_song(bpm: float = 120.0, drops: tuple[float, ...] = (32.0,)) -> SongAnalysis:
@@ -124,3 +134,34 @@ def test_section_rates_come_from_yaml() -> None:
     cfg = replace(CUTS, beats_per_cut={**CUTS.beats_per_cut, "verse": 4})
     slots = build_song_slots(make_song(drops=()), 16.0, 8.0, cfg)
     assert {round(s.duration, 3) for s in slots} == {2.0}
+
+
+def test_tempo_factor_counts_in_half_or_double_time() -> None:
+    assert tempo_factor(150.0, (70.0, 100.0)) == 2.0  # Romance auf schnellem Song: wie 75 BPM
+    assert tempo_factor(90.0, (140.0, 175.0)) == 0.5  # Hype auf langsamem Song: wie 180 BPM
+    assert tempo_factor(85.0, (70.0, 100.0)) == 1.0
+    assert tempo_factor(60.0, (70.0, 100.0)) == 1.0  # etwas zu langsam, doppelt (120) wäre weiter weg
+    assert tempo_factor(120.0, None) == 1.0
+
+
+def test_style_cuts_override_and_scale() -> None:
+    cuts = style_cuts(CUTS, {"beats_per_cut": {"verse": 4.0}, "drop": 2.0, "buildup_bars": 0.0})
+    assert cuts.beats_per_cut["verse"] == 4 and cuts.beats_per_cut["intro"] == CUTS.beats_per_cut["intro"]
+    assert cuts.drop == 2 and cuts.buildup_bars == 0 and CUTS.drop == 0.5  # default.yaml bleibt unverändert
+    half_time = style_cuts(CUTS, {}, 2.0)
+    assert half_time.beats_per_cut["verse"] == 2 * CUTS.beats_per_cut["verse"]
+    assert (half_time.drop, half_time.buildup_from, half_time.buildup_to) == (1.0, 8.0, 2.0)
+    assert half_time.drop_bars == CUTS.drop_bars  # Takte bleiben Takte
+
+
+def test_romance_cuts_much_slower_than_hype_on_the_same_song() -> None:
+    song = make_song()  # 120 BPM: für Romance (70-100) im halben Tempo gezählt, für Hype (140-175) wie er ist
+
+    def slots(name: str) -> list:
+        style = load_style(name, WEIGHTS)
+        return build_song_slots(song, 16.0, 22.0, style_cuts(CUTS, style.cuts, tempo_factor(song.bpm, style.bpm)))
+
+    romance, hype = slots("romance"), slots("hype")
+    assert len(romance) * 3 < len(hype)
+    assert min(s.duration for s in romance) >= 1.0
+    assert min(s.duration for s in hype if s.section == "drop") == pytest.approx(0.25)

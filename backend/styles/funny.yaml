@@ -1,8 +1,24 @@
 # Stil "Funny": übertriebene Reaktionen, Chibi-Gesichter, Streit mit Pointe.
-# Phase 4 nutzt nur mood, pool und weights. BPM-Bereich, Schnittrate, Übergänge und Effekte
-# kommen in Phase 6 dazu.
 
 description: Übertriebene Reaktionen und Pointen
+
+bpm: [100, 130]
+
+cuts:
+  beats_per_cut: {intro: 4, verse: 4, chorus: 2, bridge: 4, outro: 4}
+  drop: 2
+  buildup_bars: 0
+
+transitions:
+  default: cut
+  drop: flash
+
+effects:
+  look: bright
+  # Auf Pointen: Der Clip läuft, sein stärkster Moment (Reaktion) landet auf einem späten Beat im Clip,
+  # dort friert das Bild ein und zoomt aufs Gesicht.
+  freeze: {zoom: 0.25, min_seconds: 1.2}
+  zoom_punch: {zoom: 0.1, at: cut, zones: [chorus, drop]}
 
 mood:
   funny: 1.0

@@ -4,7 +4,9 @@ Phase 1: zufällig (assign_random). Phase 3: Bewegung passend zur Song-Energie, 
 Bewegungsmoment des Clips landet genau auf einem Beat (assign_to_beats). Phase 4: Auswahl nach der
 Score-Formel (scoring.py) mit Stimmung, Qualität, Wiederholung und Dialog. Phase 5: gewünschte
 Figuren (--characters) und nicht zu oft dieselbe Figur hintereinander. Streuung (spread.py): höchstens
-2 Clips pro Minute einer Folge, damit ein Edit nicht eine Szene nacherzählt.
+2 Clips pro Minute einer Folge, damit ein Edit nicht eine Szene nacherzählt. Phase 6: Slow-Mo und
+Speed-Ramps (Slot.timing) ändern, wie viel vom Clip ein Slot braucht, und der Stil "story" nimmt die
+Clips in der Reihenfolge der Staffel.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from backend.analysis.video.faces import ClipFace
 from backend.analysis.video.scenes import Scene
 from backend.config.settings import ScoreWeights
 from backend.planner.scoring import ENERGY_ONLY, character_tiers, score_clip, style_pool
@@ -42,6 +45,8 @@ class Candidate:
     speech: float | None = None
     # Ab Phase 5: AniList-ID der Figur -> Sicherheit 0-1
     characters: dict[int, float] | None = None
+    # Ab Phase 6 für den Reframe: alle Gesichter im Clip (None = nicht gesucht)
+    faces: tuple[ClipFace, ...] | None = None
 
     @property
     def duration(self) -> float:
@@ -70,7 +75,7 @@ class Assignment:
 
     @property
     def source_end(self) -> float:
-        return self.source_start + self.slot.duration
+        return self.source_start + self.slot.source_duration
 
 
 def usable_scenes(
@@ -129,15 +134,16 @@ def align_start(cand: Candidate, slot: Slot) -> tuple[float, bool]:
     """Wo im Clip beginnt der Ausschnitt? Wenn möglich so, dass der Bewegungs-Peak auf einem Beat liegt.
 
     slot.hits sind die Beats im Slot (ab Slot-Anfang), der Schnitt selbst (0.0) zuerst. Wir nehmen
-    den ersten, bei dem der Ausschnitt noch komplett im Clip liegt.
+    den ersten, bei dem der Ausschnitt noch komplett im Clip liegt. Läuft der Clip langsamer oder
+    schneller (Phase 6), wird mit der Clip-Zeit gerechnet (slot.source_hit, slot.source_duration).
     """
-    latest = cand.end - slot.duration
+    latest = cand.end - slot.source_duration
     if cand.peak is not None:
         for offset in slot.hits:
-            start = cand.peak - offset
+            start = cand.peak - slot.source_hit(offset)
             if cand.start - 1e-6 <= start <= latest + 1e-6:
                 return min(max(start, cand.start), max(cand.start, latest)), True
-        return min(max(cand.peak - slot.hits[0], cand.start), max(cand.start, latest)), False
+        return min(max(cand.peak - slot.source_hit(slot.hits[0]), cand.start), max(cand.start, latest)), False
     middle = cand.start + max(0.0, latest - cand.start) / 2
     return middle, False
 
@@ -155,8 +161,8 @@ def _motion_ranks(candidates: list[Candidate]) -> list[float]:
 def _can_align(cand: Candidate, slot: Slot) -> bool:
     if cand.peak is None:
         return False
-    latest = cand.end - slot.duration
-    return any(cand.start - 1e-6 <= cand.peak - o <= latest + 1e-6 for o in slot.hits)
+    latest = cand.end - slot.source_duration
+    return any(cand.start - 1e-6 <= cand.peak - slot.source_hit(o) <= latest + 1e-6 for o in slot.hits)
 
 
 def repeated_characters(result: Sequence[Assignment], count: int, exempt: frozenset[int]) -> frozenset[int]:
@@ -165,6 +171,26 @@ def repeated_characters(result: Sequence[Assignment], count: int, exempt: frozen
         return frozenset()
     sets = [a.candidate.character_ids if a.candidate else frozenset() for a in result[-count:]]
     return frozenset.intersection(*sets) - exempt
+
+
+def chronological_order(candidates: Sequence[Candidate]) -> list[int]:
+    """Indizes der Clips in der Reihenfolge der Staffel: Folge für Folge, in jeder Folge nach Zeit."""
+    return sorted(range(len(candidates)),
+                  key=lambda i: (candidates[i].episode or 0, str(candidates[i].video), candidates[i].start))
+
+
+def in_story_order(pool: list[int], position: dict[int, int], last: int, slot: int, slots: int) -> list[int]:
+    """Story-Stil: nur Clips nach dem zuletzt gewählten, und nicht weit vor dem Stück der Staffel, das zu
+    diesem Slot gehört (Slot 10 von 40 bekommt etwa das zweite Viertel). So läuft das Edit einmal durch
+    die ganze Staffel. Hinter dem gewählten Clip müssen noch genug Clips für die restlichen Slots frei sein,
+    sonst müsste das Edit am Ende zurückspringen. Ist nichts davon frei, irgendein späterer Clip, sonst wie
+    gehabt."""
+    total = len(position)
+    limit = (slot + 2) * total / max(1, slots)  # ein Stück Spielraum nach vorn
+    later = sorted((i for i in pool if position[i] > last), key=lambda i: position[i])
+    room = later[: max(1, len(later) - (slots - slot - 1))]  # Platz für die restlichen Slots lassen
+    near = [i for i in room if position[i] < limit]
+    return near or room or pool
 
 
 def assign_to_beats(
@@ -181,6 +207,7 @@ def assign_to_beats(
     max_same_character_in_row: int = 0,
     spread_max_clips: int = 0,
     spread_window: float = 60.0,
+    chronological: bool = False,
 ) -> list[Assignment]:
     """Greedy, Slot für Slot: passend lange Clips, möglichst mit Peak auf dem Beat, nach Score sortiert.
 
@@ -192,6 +219,8 @@ def assign_to_beats(
     doppelt, nicht zu oft dieselbe Folge oder Figur hintereinander.
 
     Reihenfolge, wenn sich Wünsche widersprechen: Figuren vor Stil vor Streuung vor Abwechslung vor Beat.
+    Mit chronological (Stil "story") kommen die Clips in der Reihenfolge der Staffel, das geht allem vor,
+    und "nicht zu oft dieselbe Folge hintereinander" entfällt.
     """
     if not candidates:
         raise ValueError("Keine Clips zur Auswahl.")
@@ -205,9 +234,11 @@ def assign_to_beats(
     occupied = Occupied()
     in_edit: Counter[int | None] = Counter()
     result: list[Assignment] = []
+    position = {i: k for k, i in enumerate(chronological_order(candidates))} if chronological else {}
+    last = -1
 
-    for slot in slots:
-        pool = [i for i, c in enumerate(candidates) if c.duration >= slot.duration - 1e-6]
+    for number, slot in enumerate(slots):
+        pool = [i for i, c in enumerate(candidates) if c.duration >= slot.source_duration - 1e-6]
         fresh = [i for i in pool if i not in used]
         if fresh:
             pool = fresh
@@ -215,8 +246,10 @@ def assign_to_beats(
             log.debug("Alle passenden Clips schon benutzt, nehme einen doppelt.")
         else:
             longest = max(range(len(candidates)), key=lambda i: candidates[i].duration)
-            log.warning("Kein Clip ist %.2f s lang, nehme den längsten.", slot.duration)
+            log.warning("Kein Clip ist %.2f s lang, nehme den längsten.", slot.source_duration)
             pool = [longest]
+        if chronological:
+            pool = in_story_order(pool, position, last, number, len(slots))
 
         for tier in tiers:  # erst alle gewünschten Figuren, dann mindestens eine
             narrowed = [i for i in pool if i in tier]
@@ -227,8 +260,9 @@ def assign_to_beats(
             pool = [i for i in pool if i in in_style] or pool
         pool = spread_out(pool, candidates, occupied, spread_max_clips, spread_window)
 
-        recent = [a.episode for a in result[-max_same_episode_in_row:]] if max_same_episode_in_row > 0 else []
-        if len(recent) == max_same_episode_in_row and recent and len(set(recent)) == 1 and recent[0] is not None:
+        in_row = 0 if chronological else max_same_episode_in_row
+        recent = [a.episode for a in result[-in_row:]] if in_row > 0 else []
+        if len(recent) == in_row and recent and len(set(recent)) == 1 and recent[0] is not None:
             other = [i for i in pool if candidates[i].episode != recent[0]]
             pool = other or pool
 
@@ -245,6 +279,8 @@ def assign_to_beats(
         best = sorted(pool, key=lambda i: (-scores[i], i))[: max(1, pick_from_top)]
         idx = rng.choice(best)
         used.add(idx)
+        if chronological:
+            last = position[idx]
         cand = candidates[idx]
         crowd = occupied.crowd(cand, spread_window) if spread_max_clips > 0 else None
         occupied.add(cand)

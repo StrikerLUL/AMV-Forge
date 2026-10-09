@@ -3,7 +3,7 @@
 Aus einer Anime-Staffel und einem Song automatisch ein beat-synchrones 9:16-Edit für TikTok schneiden.
 Die komplette Projektbeschreibung und Roadmap steht in [CLAUDE.md](CLAUDE.md).
 
-## Stand: Phase 5 (Charaktere) + Streuung
+## Stand: Phase 6 (Stil-Profile, Effekte, 9:16-Reframe)
 
 - **Phase 1, `quick`:** Eine Folge + ein Song → 9:16-MP4, jeder Schnitt exakt auf dem Beat.
 - **Phase 2, `index`:** Eine ganze Staffel (aus einem Ordner oder aus Jellyfin) wird einmal analysiert und landet in `data/amv_forge.sqlite`: Folgen, Szenen ohne Opening/Ending/Recap, Metadaten und Charaktere von AniList, Filler-Markierung von Jikan. Ein zweiter Lauf berechnet nichts neu.
@@ -11,6 +11,7 @@ Die komplette Projektbeschreibung und Roadmap steht in [CLAUDE.md](CLAUDE.md).
 - **Phase 4, Stimmung und `--style`:** `index` schaut sich jetzt jeden Clip an (CLIP), hört hin (Lautstärke, wird geredet?) und liest die Untertitel. Daraus wird pro Clip ein Stimmungsvektor (romance, action, sad, funny, calm). `edit --style romance` nimmt dann fast nur ruhige Paar-Szenen, `--style hype` fast nur Action. Schwarzbilder, Abspann, Logos und verwackelte Clips fliegen raus. `moods` zeigt, was erkannt wurde, mit Kontaktbögen zum Anschauen.
 - **Phase 5, Figuren und `--characters`:** `index` sucht jetzt in jedem Clip Anime-Gesichter und ordnet sie den Figuren von AniList zu. `edit --characters "Hori,Miyamura"` nimmt dann zuerst Szenen, in denen beide zu sehen sind. `characters` zeigt, wer wie oft erkannt wurde, mit Kontaktbögen der Gesichter zum Prüfen.
 - **Streuung (nach Phase 5):** Aus jeder Minute einer Folge kommen höchstens 2 Clips ins Edit, und Folgen, die schon deutlich öfter dran waren als der Durchschnitt, bekommen einen Abzug. Ein Edit erzählt so nicht mehr eine einzelne Kampfszene nach.
+- **Phase 6, Stil-Profile, Effekte und Smart Reframe:** Jeder Stil (`romance`, `hype`, `sad`, `funny`, neu `story`) bringt jetzt sein eigenes Tempo, seine Schnittrate, Übergänge (Crossfade, Dip to White, Flash, Whip …), Effekte (Slow-Mo, Speed-Ramps, Zoom-Punch, Shake, Freeze-Frame) und einen Farblook mit. Der 9:16-Ausschnitt folgt den Gesichtern aus Phase 5 bzw. der Bewegung, statt stumpf die Mitte zu nehmen. Ein Kontaktbogen zeigt pro Clip, wo der Ausschnitt liegt.
 
 ### So läuft `quick` (Phase 1)
 
@@ -18,7 +19,7 @@ Die komplette Projektbeschreibung und Roadmap steht in [CLAUDE.md](CLAUDE.md).
 2. **Slots bauen** (`backend/planner/slots.py`): Ab dem ersten Beat wird alle `beats_per_cut` Beats geschnitten. Ein Slot ist die Zeit zwischen zwei Schnitten. Seit Phase 3 nur noch mit `--uniform`, sonst wie unten bei Phase 3.
 3. **Szenen finden** (`backend/analysis/video/scenes.py`): PySceneDetect sucht alle Kamerawechsel. Das Ergebnis wird in `data/cache/scenes/` gespeichert.
 4. **Clips verteilen** (`backend/planner/assign.py`): Jeder Slot bekommt eine Szene, die lang genug ist, möglichst ohne Wiederholung.
-5. **Rendern** (`backend/render/ffmpeg_graph.py`): ffmpeg schneidet jeden Clip frame-genau auf 30 fps, macht daraus 1080×1920 (Mitte, Smart Reframe kommt in Phase 6) und legt den Song drunter.
+5. **Rendern** (`backend/render/ffmpeg_graph.py`): ffmpeg schneidet jeden Clip frame-genau auf 30 fps, macht daraus 1080×1920 (seit Phase 6 mit Smart Reframe, siehe unten) und legt den Song drunter.
 
 ### So läuft `index` (Phase 2)
 
@@ -53,7 +54,7 @@ Alles passiert in `index`, pro Folge einmal (`backend/mood_index.py`):
 6. **Stimmungsvektor** (`backend/analysis/mood.py`): Jedes Signal wird innerhalb der Staffel in einen Rang 0–1 umgerechnet (0 = kleinster Wert der Staffel, 1 = größter). Pro Stimmung ergibt sich dann ein gewichteter Mittelwert: viel Bewegung und laut → action, leise ohne Sprache → romance/calm, dazu CLIP und Untertitel. Die Gewichte stehen unter `mood.weights` in `default.yaml`. Fehlt ein Signal (keine Untertitel), zählen nur die anderen.
 
 Danach wählt `edit` mit der **Score-Formel** (`backend/planner/scoring.py`) aus CLAUDE.md:
-`Score = Stimmung + Energie-Passung + Qualität − Wiederholung − Überhang − Dialog`, jeweils mit Gewicht (Überhang siehe Streuung unten). Die Ziel-Stimmung und die Gewichte jedes Stils stehen in `backend/styles/<stil>.yaml` (romance, hype, sad, funny). Mit Stil kommen nur die 30 % der Clips in Frage, die am besten zur Ziel-Stimmung passen, daraus nimmt der Planer pro Slot einen der 8 besten.
+`Score = Stimmung + Energie-Passung + Qualität − Wiederholung − Überhang − Dialog`, jeweils mit Gewicht (Überhang siehe Streuung unten). Die Ziel-Stimmung und die Gewichte jedes Stils stehen in `backend/styles/<stil>.yaml` (romance, hype, sad, funny, story). Mit Stil kommen nur die 30 % der Clips in Frage, die am besten zur Ziel-Stimmung passen, daraus nimmt der Planer pro Slot einen der 8 besten.
 
 ### So läuft die Figurenerkennung (Phase 5)
 
@@ -74,6 +75,17 @@ Ohne Streuung nimmt der Planer pro Slot einfach einen der besten Clips. Die best
 2. **Überhang** (`weights.overuse: 0.3`): Kam eine Folge im bisherigen Edit schon deutlich öfter dran als der Durchschnitt, gibt es einen Abzug im Score. Beispiel: Nach 26 Clips aus 13 Folgen ist der Durchschnitt 2, eine Folge mit 3 Clips bekommt ein Drittel des Abzugs, ab 5 den vollen.
 
 Wenn sich Wünsche widersprechen, gilt: gewünschte Figuren vor Stil vor Streuung vor Abwechslung (Folge/Figur nicht 3× hintereinander) vor Bewegungs-Peak auf dem Beat. Bei `--characters "Hori,Miyamura"` mit 81 Schnitten und 71 Paar-Szenen werden deshalb alle Paar-Szenen genommen, egal wo sie liegen; die Streuung wirkt erst, wenn es mehr passende Clips als Schnitte gibt. Am Ende zeigt `edit` die dichteste Stelle („Dichteste Stelle: 2 Clips aus Folge 1 zwischen 10:18.0 und 10:44.0“), in der `.plan.json` steht pro Clip `crowd` (so viele Clips kamen bei der Wahl aus derselben Minute der Folge).
+
+### So laufen Stil-Profile, Effekte und Reframe (Phase 6)
+
+1. **Tempo des Stils** (`backend/planner/song_slots.py`): Jeder Stil ist für einen BPM-Bereich gemacht (Romance 70–100, Hype 140–175, Sad 60–90, Funny 100–130, Story egal). Liegt der Song daneben, wird im halben oder doppelten Tempo gezählt: Ein 150-BPM-Song wird für Romance wie 75 BPM geschnitten, also mit doppelt so vielen Beats pro Clip. Die Schnittrate pro Abschnitt steht unter `cuts:` im Stil und überschreibt `cuts:` aus `default.yaml`.
+2. **Tempo der Clips** (`backend/render/effects.py`): Slow-Mo (Romance 0,8×, Sad 0,75×) und Speed-Ramps (Hype: nach dem Schnitt 0,5×, dann 1,6×) stehen schon vor der Clip-Wahl fest, denn ein Slot in Zeitlupe braucht weniger vom Clip. Der Bewegungs-Peak landet trotzdem genau auf dem Beat, gerechnet wird in Clip-Zeit (`Timing` in `backend/planner/slots.py`).
+3. **Reihenfolge:** `story` nimmt die Clips in der Reihenfolge der Staffel, Folge für Folge, und lässt dabei hinten genug Clips für die restlichen Schnitte übrig. Dafür entfällt dort „nicht 3× dieselbe Folge hintereinander“.
+4. **Übergänge:** An jedem Schnitt gilt die erste passende Regel aus dem Stil: erster Schnitt im Drop (`drop`), neuer Abschnitt (`section`), Schnitt auf einem Taktanfang (`downbeat`), sonst `default`. Bei **Crossfade** und **Whip** sind kurz beide Clips zu sehen, die Mitte der Überblendung liegt genau auf dem Beat. **Dip to White** und **Fade to Black** blenden erst in die Farbe und dann heraus, **Flash** blitzt weiß auf und blendet ins neue Bild. Ein Übergang ist höchstens halb so lang wie der kürzere Clip, im Drop mit Halbbeat-Schnitten wird deshalb oft hart geschnitten.
+5. **Effekte pro Clip:** **Zoom-Punch** (kurz 10–12 % ranzoomen, am Schnitt, auf jeder Eins oder jedem Beat), **Shake** (der Ausschnitt wackelt), **Push-In** (über den Clip langsam ans Gesicht heran), **Freeze-Frame** (Funny: der Clip läuft, auf dem Beat mit dem Bewegungs-Peak bleibt das Bild stehen und zoomt aufs Gesicht). `zones` begrenzt einen Effekt auf bestimmte Abschnitte, `min_seconds` auf längere Clips.
+6. **Farblook** (`backend/render/looks.py`): Ein Look ist eine **3D-LUT**, eine Tabelle „aus dieser Farbe wird jene“ für ein Raster von 17×17×17 Farben, ffmpeg rechnet für jeden Pixel dazwischen. Die Looks `warm`, `punchy`, `cold`, `bright` und `film` stehen als Zahlen (Wärme, Sättigung, Kontrast …) unter `fx.looks` in `default.yaml`, das Tool schreibt daraus `.cube`-Dateien nach `data/cache/looks/`. Eigene `.cube`-Dateien (z. B. aus DaVinci Resolve) gehen auch. Dazu kommen **Soft Glow** (eine unscharfe Kopie des Bilds wird hell darübergelegt) und **Vignette** (dunklere Ecken).
+7. **Smart Reframe** (`backend/render/reframe.py`): Aus einem 16:9-Bild passt nur knapp ein Drittel der Breite ins 9:16-Format. Wo dieses Drittel liegt, entscheiden die Gesichter aus Phase 5 (mit `--characters` die gewünschten Figuren, sonst alle großen Gesichter): Passen sie zusammen rein, kommt der Ausschnitt in ihre Mitte; bewegen sie sich zwischen den Standbildern, wandert er mit; stehen zwei zu weit auseinander, schwenkt er in Clips ab 1,2 s langsam vom einen zum anderen, in kürzeren bleibt er auf dem wichtigsten Gesicht. Ohne Gesichter folgt er dem **Bewegungsschwerpunkt**: Optical Flow wie in Phase 3, davon wird die Bewegung der Kamera abgezogen (der Median aller Bewegungen), übrig bleibt, was sich selbst bewegt. Sonst die Mitte.
+8. **Rendern** (`backend/render/ffmpeg_graph.py`): Jeder Clip ist weiterhin ein eigenes, frame-genaues Stück. Neu darin: `setpts` (Tempo), `crop` mit wanderndem x (Reframe), `zoompan` (Zooms), bewegter `crop` (Shake), `lut3d` (Look), `xfade` (Überblendungen) und `fade` (Flash, Dips). Die Länge bleibt Frame für Frame gleich, jeder Schnitt liegt weiter auf dem Beat.
 
 ## Installation (Windows)
 
@@ -224,7 +236,7 @@ Am Ende steht, welche Stimmung im Edit steckt („Stärkste Stimmung pro Clip: r
 | `backend/prompts/dialog_prompts.yaml` | Beispielsätze für Untertitel | Nur die Untertitel |
 | `default.yaml` → `mood.weights` | Wie stark CLIP, Bewegung, Ton, Untertitel zählen | Nur die Mischung, Sekunden |
 | `default.yaml` → `quality` | Ab wann ein Clip als schwarz/Text/unscharf gilt | Nur die Mischung |
-| `backend/styles/*.yaml` | Ziel-Stimmung, Pool-Größe, Gewichte der Score-Formel | Nichts, wirkt sofort beim nächsten `edit` |
+| `backend/styles/*.yaml` | Ziel-Stimmung, Pool-Größe, Gewichte der Score-Formel, ab Phase 6 Tempo, Schnittrate, Übergänge, Effekte, Look | Nichts, wirkt sofort beim nächsten `edit` |
 | `default.yaml` → `planner` | Streuung: `spread_max_clips`, `spread_window_seconds`, `weights.overuse` | Nichts, wirkt sofort beim nächsten `edit` |
 
 Nach Änderungen an den Prompts, Gewichten oder Qualitäts-Schwellen einmal `index` laufen lassen.
@@ -325,6 +337,56 @@ python -m backend.cli edit --season 1 --song "C:\Musik\song.mp3" --style hype --
 ```
 
 Mit demselben Seed ist das erste Edit genau das von vorher. Die Zeilen „Folgen im Edit“ und „Dichteste Stelle“ zeigen den Unterschied. Wer noch mehr Streuung will, setzt `spread_max_clips: 1` (kostet bei Hype etwas Action), wer weniger will, `3`.
+
+## Benutzung: Stile, Effekte und 9:16 (Phase 6)
+
+Nichts zu installieren und nichts neu zu indizieren, `edit --style` macht jetzt einfach mehr:
+
+```bat
+python -m backend.cli edit --season 1 --song "C:\Musik\song.mp3" --style romance --seed 7 --preview --out data\renders\romance.mp4
+```
+
+| Stil | BPM | Schnitte | Übergänge | Effekte |
+| --- | --- | --- | --- | --- |
+| `romance` | 70–100 | alle 2–4 Beats, im Refrain 4 | Crossfade, Dip to White bei neuem Abschnitt und im Drop | warm, Soft Glow, Slow-Mo 0,8×, Push-In |
+| `hype` | 140–175 | alle 2 Beats, Refrain 1, Build-up 4 → 1, Drop ½ | harte Cuts, Flash auf der Eins und im Drop, Whip bei neuem Abschnitt | punchy, Zoom-Punch auf der Eins, Shake im Drop, Speed-Ramps |
+| `sad` | 60–90 | alle 4–8 Beats | lange Crossfades (1,5 Beats), Fade to Black | cold (entsättigt), Vignette, Slow-Mo 0,75×, Push-In |
+| `funny` | 100–130 | alle 2–4 Beats | harte Cuts, Flash im Drop | bright, Freeze-Frame mit Zoom aufs Gesicht, Zoom-Punch |
+| `story` | egal | alle 2–4 Beats | Cuts, Crossfade bei neuem Abschnitt, Flash im Drop | film, Clips in der Reihenfolge der Staffel |
+
+Neue Zeilen in der Ausgabe:
+
+- „Stil romance ist für 70-100 BPM gemacht, der Song hat 150 BPM: Schnittrate im halben Tempo gezählt (wie 75 BPM)“
+- „Reframe 9:16 (Clips): Gesichter 40, Bewegung 20, Mitte 15, Schwenk 6“ und „Gesichter ganz im 9:16-Bild: 85 von 100 (85 %), aus der Mitte geschnitten wären es 40 (40 %)“
+- „Übergänge (romance): crossfade 20, dip_white 3“ und „Effekte: tempo 18, push_in 9, Look warm, Glow 0.3“
+- pro Clip in Klammern, was er bekommt, z. B. „(crossfade, tempo 0.8x, push_in)“
+
+Neben dem Video liegt `<name>.reframe.jpg`: pro Clip das ganze 16:9-Bild, der 9:16-Ausschnitt hell, der Rest abgedunkelt, Gesichter grün (ganz im Bild), rot (abgeschnitten) oder grau (zählt nicht, Hintergrund). In der `.plan.json` stehen pro Clip `transition`, `effects`, `timing` (Tempo) und `framing` (Art, Position, Gesichter im Bild).
+
+Optionen zum Vergleichen:
+
+| Option | Wirkung |
+| --- | --- |
+| `--center` | 9:16 aus der Mitte wie bis Phase 5 (gilt auch für `quick`) |
+| `--no-effects` | Clips und Schnittrate wie im Stil, aber ohne Übergänge, Effekte und Look |
+| `--characters "Hori,Miyamura"` | der Ausschnitt geht auf diese Figuren, nicht aufs größte Gesicht |
+
+### Nachjustieren ohne Code
+
+Alles steht in `backend/styles/<stil>.yaml` (kommentiert) und unter `reframe:` und `fx:` in `default.yaml`. Am einfachsten eine Stil-Datei kopieren, z. B. `backend\styles\romance2.yaml`, die taucht dann bei `--style` als `romance2` auf.
+
+| Wo | Was |
+| --- | --- |
+| Stil → `bpm` | für welches Tempo die Schnittrate gedacht ist (weglassen = Song wird nie halb/doppelt gezählt) |
+| Stil → `cuts` | Beats pro Clip je Abschnitt (`beats_per_cut`), im Drop (`drop`), Build-up (`buildup_bars`, `buildup_from`, `buildup_to`) |
+| Stil → `transitions` | `default`, `downbeat`, `section`, `drop` (cut, flash, crossfade, dip_white, fade_black, whip), `beats` = Länge |
+| Stil → `effects` | `look`, `glow`, `vignette`, `slowmo`, `speed_ramp`, `zoom_punch`, `shake`, `push_in`, `freeze` (jeweils mit `zones` und `min_seconds`) |
+| `fx.looks` | die Farblooks als Zahlen: `warmth`, `tint`, `saturation`, `contrast`, `brightness`, `lift` |
+| `fx` | Länge von Flash und Whip, wie schnell der Punch zurückgeht, wie schnell der Shake wackelt |
+| `reframe.too_wide` | Paar zu weit auseinander: `pan` (Schwenk), `main` (wichtigstes Gesicht), `fit` (ganzes Bild, oben und unten unscharf) |
+| `reframe.margin`, `min_face_share` | Abstand der Gesichter zum Rand, ab welcher Größe ein Gesicht zählt |
+
+Ein Tippfehler in einer Stil-Datei (z. B. `dorp:` statt `drop:`) bricht mit einer Meldung ab, die sagt, was erlaubt ist.
 
 ## Tests
 
