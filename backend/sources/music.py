@@ -30,7 +30,7 @@ class LibraryTrack:
 
     @property
     def label(self) -> str:
-        return f"{self.artist} - {self.title}" if self.artist else self.title
+        return song_label(self.artist, self.title)
 
     def matches(self, search: str | None, genre: str | None) -> bool:
         """--search: Teil von Interpret, Titel, Album oder Dateiname. --genre: Teil eines Genres."""
@@ -42,6 +42,52 @@ class LibraryTrack:
         if genre and not any(genre.lower() in g.lower() for g in self.genres):
             return False
         return True
+
+
+# Zusätze in YouTube-Titeln, die beim Anzeigen nur stören: "(Official Video)", "[NCS Release]", "| Lyrics" ...
+_EXTRA = r"official[^)\]|]*|lyrics?(?: video)?|audio|visuali[sz]er|music video|video|mv|hd|hq|4k|ncs release|spotisaver"
+_BRACKETS = re.compile(rf"\s*[(\[【]\s*(?:{_EXTRA})\s*[)\]】]", re.IGNORECASE)
+_TRAILING = re.compile(rf"\s+(?:official music video|official video|official audio|mv)$", re.IGNORECASE)
+_PIPE = re.compile(r"\s*\|.*(?:ncs|copyright|release|lyrics?).*$", re.IGNORECASE)
+_DASH = re.compile(r"\s+[-–—]\s+")
+# Interpret-Tags, die eigentlich YouTube-Kanäle sind ("NoCopyrightSounds", "SiM Official YouTube Channel")
+_CHANNEL = re.compile(r"official|channel|vevo|records|recordings|music\b|sounds\b|nation\b|- topic", re.IGNORECASE)
+
+
+def _clean_title(title: str) -> str:
+    cleaned, before = title.strip(), ""
+    while cleaned != before:
+        before = cleaned
+        cleaned = _TRAILING.sub("", _BRACKETS.sub("", _PIPE.sub("", cleaned))).strip()
+    if len(cleaned) > 2 and cleaned[0] == cleaned[-1] and cleaned[0] in "\"'":
+        cleaned = cleaned[1:-1].strip()
+    return cleaned or title.strip()
+
+
+def _contains(text: str, part: str) -> bool:
+    """Steht part als eigenes Wort (oder mehrere) in text? "Ado" in "【Ado】 唱" ja, in "Shadow" nicht."""
+    return re.search(rf"(?<!\w){re.escape(part)}(?!\w)", text, re.IGNORECASE) is not None
+
+
+def song_name(artist: str | None, title: str) -> tuple[str | None, str]:
+    """(Interpret, Titel) zum Anzeigen. Bei YouTube-Downloads steht oft der Kanal als Interpret und
+    "Interpret - Titel (Official Video)" als Titel: dann zählt der Interpret aus dem Titel."""
+    artist = (artist or "").strip() or None
+    title = _clean_title(title)
+    parts = [p.strip() for p in _DASH.split(title, maxsplit=1)]
+    if len(parts) == 2 and all(parts):
+        first = parts[0]
+        if artist is None or _contains(first, artist) or _contains(artist, first) or _CHANNEL.search(artist):
+            return first, _clean_title(parts[1])
+    return artist, title
+
+
+def song_label(artist: str | None, title: str) -> str:
+    """ "R2 " + "R2 - Blah Blah Blah (Official Visualiser)" -> "R2 - Blah Blah Blah" """
+    shown_artist, shown_title = song_name(artist, title)
+    if shown_artist is None or _contains(shown_title, shown_artist):
+        return shown_title
+    return f"{shown_artist} - {shown_title}"
 
 
 def split_genres(value: str | None) -> list[str]:

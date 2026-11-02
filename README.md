@@ -408,7 +408,7 @@ Ein Tippfehler in einer Stil-Datei (z. B. `dorp:` statt `drop:`) bricht mit eine
 
 ## Benutzung: Songvorschläge (Phase 7)
 
-Nichts neu zu installieren. Beim ersten Lauf lädt das Tool das CLAP-Modell von Hugging Face (etwa 0,8 GB, einmalig, landet in `%USERPROFILE%\.cache\huggingface`). Klappt das nicht (kein Internet, `transformers` fehlt), läuft alles ohne CLAP weiter, nur mit den Messwerten, und beim nächsten Lauf wird es erneut versucht.
+Nichts neu zu installieren. Beim ersten Lauf lädt das Tool das CLAP-Modell von Hugging Face (etwa 0,8 GB, einmalig, landet in `%USERPROFILE%\.cache\huggingface`). Klappt das nicht (kein Internet, `transformers` fehlt, kaputtes torchaudio), läuft alles ohne CLAP weiter, nur mit den Messwerten. Die Stimmung ist dann nur grob geschätzt: `music` und `suggest` sagen das mit einer Zeile „Achtung: … ohne CLAP“ (auch in der Vorschlagsdatei). Jeder neue `music`-Lauf probiert CLAP einmal; lädt es, rechnet er die Stimmung dieser Songs nach, sonst bleibt alles, wie es ist.
 
 ### Musik analysieren (einmal, dann nur neue Songs)
 
@@ -461,13 +461,23 @@ Stimmung dieser Clips: romance 0.71, calm 0.66, sad 0.41, funny 0.38, action 0.2
 ...
 ```
 
-(Song und Zahlen sind ein Beispiel.) Die Liste steht zusätzlich in `data\renders\vorschlaege_s1_romance.txt`, die letzte Zeile jedes Vorschlags ist der fertige `edit`-Befehl.
+(Song und Zahlen sind ein Beispiel.) Die Liste steht zusätzlich in `data\renders\vorschlaege_s1_romance.txt`, die letzte Zeile jedes Vorschlags ist der fertige `edit`-Befehl. Dieselbe Datei unter zwei Namen (z. B. `song.mp3` und derselbe Song im Musikordner) zählt nur einmal. Bei YouTube-Downloads zeigt das Tool „R2 - Blah Blah Blah“ statt „R2 - R2 - Blah Blah Blah (Official Visualiser)“; steht der YouTube-Kanal als Interpret in der Datei (z. B. NoCopyrightSounds), zählt für „höchstens 2 pro Interpret“ der Interpret aus dem Titel.
 
 | Option | Wirkung |
 | --- | --- |
 | `--top 10` | mehr Vorschläge (Standard 5) |
 | `--length 45` | für ein 45-s-Edit (Ausschnitt, Schnitte und Material werden dafür berechnet; der `edit`-Befehl bekommt `--length 45`) |
 | `--characters "Hori,Miyamura"` | zählt nur die Szenen mit beiden; wenig Material wird als Einwand genannt |
+
+### Wenn CLAP nicht lädt
+
+Steht im Log `laion/larger_clap_music konnte nicht geladen werden (OSError: Could not load this library: ...\torchaudio\lib\libtorchaudio.pyd)`, passt das installierte torchaudio nicht zu torch (meist nach einem torch-Update auf die CUDA-Version). Neuere `transformers` laden torchaudio automatisch mit, sobald es installiert ist, und scheitern dann. AMV-Forge braucht torchaudio nicht (nur das optionale allin1), also weg damit:
+
+```bat
+python -m pip uninstall -y torchaudio
+```
+
+Danach `music` noch einmal mit demselben Ordner starten. Er rechnet nur die Stimmung der Songs nach, die ohne CLAP eingeordnet waren (Tempo und Abschnitte bleiben), und am Ende fehlt die Zeile „Achtung: … ohne CLAP“.
 
 ### Nachjustieren ohne Code
 

@@ -15,3 +15,15 @@ def signature(*parts: object) -> str:
 def file_signature(path: Path) -> str:
     stat = path.stat()
     return f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
+
+
+def content_signature(path: Path, chunk: int = 1 << 16) -> str:
+    """Fingerabdruck des Inhalts (Größe, Anfang und Ende der Datei): erkennt Kopien unter anderem Namen."""
+    size = path.stat().st_size
+    digest = hashlib.sha1(str(size).encode("utf-8"))
+    with path.open("rb") as f:
+        digest.update(f.read(chunk))
+        if size > chunk:
+            f.seek(max(chunk, size - chunk))
+            digest.update(f.read(chunk))
+    return digest.hexdigest()[:16]

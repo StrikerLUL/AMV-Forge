@@ -21,6 +21,7 @@ from backend.config.settings import Settings
 from backend.config.styles import StyleProfile
 from backend.planner.scoring import Scorable, character_tiers, style_pool
 from backend.planner.song_slots import build_song_slots, choose_edit_start, style_cuts, tempo_factor
+from backend.sources.music import song_label, song_name
 
 MOOD_WORDS = {"romance": "romantisch", "action": "actiongeladen", "sad": "traurig", "funny": "fröhlich",
               "calm": "ruhig"}
@@ -51,7 +52,12 @@ class LibrarySong:
 
     @property
     def label(self) -> str:
-        return f"{self.artist} - {self.title}" if self.artist else self.title
+        return song_label(self.artist, self.title)
+
+    @property
+    def main_artist(self) -> str:
+        """Interpret für suggest.max_per_artist (bei YouTube-Downloads der aus dem Titel, nicht der Kanal)."""
+        return (song_name(self.artist, self.title)[0] or "").lower()
 
 
 @dataclass(frozen=True)
@@ -214,7 +220,7 @@ def suggest(songs: Sequence[LibrarySong], style: StyleProfile, profile: SeasonPr
     per_artist: dict[str, int] = {}
     limit = settings.suggest.max_per_artist
     for r in rated:
-        artist = (r.song.artist or "").strip().lower()
+        artist = r.song.main_artist
         if artist and limit > 0 and per_artist.get(artist, 0) >= limit:
             continue
         per_artist[artist] = per_artist.get(artist, 0) + 1

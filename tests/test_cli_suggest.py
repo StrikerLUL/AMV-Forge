@@ -73,6 +73,11 @@ def test_music_and_suggest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, synt
     assert main(["music", "--list", "--config", str(config)]) == 0
     assert "a-Moll" in caplog.text
 
+    # Derselbe Song noch einmal als song.flac, einzeln mit 'song' analysiert: zählt nur einmal
+    copy = tmp_path / "song.flac"
+    shutil.copyfile(music / "DJ Test - Drop Song.flac", copy)
+    assert main(["song", str(copy), "--analyzer", "librosa", "--config", str(config)]) == 0
+
     assert main(["suggest", "--season", "1", "--style", "romance", "--config", str(config)]) == 0
     romance = (tmp_path / "data" / "renders" / "vorschlaege_s1_romance.txt").read_text(encoding="utf-8")
     assert _first_song(romance).startswith("1. Duo - Slow Love")
@@ -84,11 +89,31 @@ def test_music_and_suggest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, synt
     hype = (tmp_path / "data" / "renders" / "vorschlaege_s1_hype.txt").read_text(encoding="utf-8")
     assert _first_song(hype).startswith("1. DJ Test - Drop Song")
     assert "Drop bei" in hype and "--length 20" in hype
+    assert "song.flac ist dieselbe Datei wie DJ Test - Drop Song" in caplog.text and "2. song " not in hype
+    assert "Achtung" not in hype  # alle Songs mit CLAP eingeordnet
 
     assert main(["suggest", "--season", "1", "--style", "romance", "--characters", "Hori,Miyamura",
                  "--config", str(config)]) == 0
     assert "18 von 60 Clips mit Kyouko Hori + Izumi Miyamura kommen in Frage" in caplog.text  # wie bei edit
     assert main(["suggest", "--season", "7", "--style", "romance", "--config", str(config)]) == 1
+
+
+def test_suggest_says_when_clap_was_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                            caplog: pytest.LogCaptureFixture) -> None:
+    monkeypatch.chdir(tmp_path)
+    music = tmp_path / "Musik"
+    music.mkdir()
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(make_ballad(tmp_path / "ballad.wav")), "-c:a", "flac",
+                    str(music / "Duo - Slow Love.flac")], check=True)
+    config = tmp_path / "light.yaml"
+    config.write_text(LIGHT + "music_mood:\n  clap_enabled: false\n", encoding="utf-8")
+    _season()
+    assert main(["music", "--source", "folder", "--path", str(music), "--analyzer", "librosa",
+                 "--config", str(config)]) == 0
+    assert "Achtung: 1 von 1 Songs sind ohne CLAP nur nach Messwerten eingeordnet" in caplog.text
+    assert main(["suggest", "--season", "1", "--style", "romance", "--config", str(config)]) == 0
+    text = (tmp_path / "data" / "renders" / "vorschlaege_s1_romance.txt").read_text(encoding="utf-8")
+    assert text.splitlines()[1].startswith("Achtung: 1 von 1 Songs") and "music_mood.clap_enabled" in text
 
 
 def test_suggest_without_songs_explains_what_to_do(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

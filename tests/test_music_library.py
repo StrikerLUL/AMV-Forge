@@ -10,6 +10,8 @@ import pytest
 from sqlmodel import Session, select
 
 from backend.analysis.loader import ModelLoader
+from backend.analysis.music import clap as music_clap
+from backend.commands.music import without_clap, without_copies
 from backend.config import load_settings
 from backend.config.settings import Settings
 from backend.db import get_engine
@@ -17,7 +19,8 @@ from backend.db.models import Song
 from backend import music_index
 from backend.music_index import index_library
 from backend.sources.jellyfin import JellyfinClient, JellyfinError
-from backend.sources.music import safe_filename, scan_music_folder, split_genres, title_from_filename, with_tags
+from backend.sources.music import (safe_filename, scan_music_folder, song_label, song_name, split_genres,
+                                   title_from_filename, with_tags)
 from tests.fake_models import FakeClap
 from tests.synth_song import make_ballad
 
@@ -64,6 +67,25 @@ def test_title_from_filename() -> None:
     assert title_from_filename(Path("07. Unravel.flac")) == ("Unravel", None)
     assert title_from_filename(Path("LiSA_-_Gurenge.mp3")) == ("Gurenge", "LiSA")
     assert title_from_filename(Path("2049.mp3")) == ("2049", None)
+
+
+def test_song_names_from_youtube_downloads() -> None:
+    # Kanal als Interpret, "Interpret - Titel (Official Video)" als Titel: angezeigt wird der Song
+    assert song_label("R2 ", "R2 - Blah Blah Blah (Official Visualiser)") == "R2 - Blah Blah Blah"
+    assert song_label("SiM Official YouTube Channel", "SiM – The Rumbling (OFFICIAL VIDEO)") == "SiM - The Rumbling"
+    assert song_label("NoCopyrightSounds", "Jim Yosef - Firefly | Melodic Dubstep | NCS - Copyright Free Music") == \
+        "Jim Yosef - Firefly"
+    assert song_label("Ian Asher", "Ian Asher & Phantogram- Black Out Days (Official Audio)") == \
+        "Ian Asher & Phantogram- Black Out Days"
+    assert song_label("makko", 'makko & Miksu/Macloud - "LICHTER AUS"') == "makko & Miksu/Macloud - LICHTER AUS"
+    assert song_label("Ado", "【Ado】 唱") == "【Ado】 唱"
+    # Ordentliche Tags bleiben, wie sie sind
+    assert song_label("Ado", "Shadow") == "Ado - Shadow"
+    assert song_label("LiSA", "Gurenge - TV Size") == "LiSA - Gurenge - TV Size"
+    assert song_label(None, "song") == "song"
+    # Für suggest.max_per_artist zählt der Interpret aus dem Titel, nicht der Kanal
+    assert song_name("NoCopyrightSounds", "DEAF KEV - Invincible [NCS Release]") == ("DEAF KEV", "Invincible")
+    assert song_name("Chill Nation", "INTERWORLD - METAMORPHOSIS") == ("INTERWORLD", "METAMORPHOSIS")
 
 
 def test_genres_and_filenames() -> None:
@@ -124,6 +146,58 @@ def test_new_clap_model_only_recomputes_mood(library: Path, settings: Settings) 
                            analyzer="librosa")
     assert (report.analyzed, report.structure, report.mood) == (1, 0, 1)
     assert set(_songs(settings)["Slow Love"].features["signals"]) == {"features", "clap"}
+
+
+class BrokenClap:
+    """CLAP, dessen torchaudio nicht zu torch passt (so auf Strikers PC)."""
+
+    loads = 0
+
+    def __init__(self, *_args: object) -> None:
+        BrokenClap.loads += 1
+        raise OSError(r"Could not load this library: C:\Python310\site-packages\torchaudio\lib\libtorchaudio.pyd")
+
+
+def test_clap_that_does_not_load_is_not_retried_every_run(library: Path, settings: Settings,
+                                                          monkeypatch: pytest.MonkeyPatch,
+                                                          caplog: pytest.LogCaptureFixture) -> None:
+    engine = get_engine(settings.database.path)
+    tracks = [t for t in scan_music_folder(library, (".flac",)) if t.title == "slow"]
+    monkeypatch.setattr(music_clap, "is_installed", lambda: True)
+    monkeypatch.setattr("backend.analysis.loader.ClapMusicModel", BrokenClap)
+    BrokenClap.loads = 0
+
+    first = index_library(tracks, settings, engine, ModelLoader(settings), analyzer="librosa")
+    assert (first.analyzed, first.mood) == (1, 1) and BrokenClap.loads == 1
+    assert "python -m pip uninstall -y torchaudio" in caplog.text  # sagt, wie man es repariert
+    with Session(engine) as session:
+        rows = list(session.exec(select(Song)).all())
+    assert without_clap(rows) == 1
+
+    # Nächster Lauf, CLAP lädt wieder nicht: einmal probiert, nichts neu gerechnet
+    second = index_library(tracks, settings, engine, ModelLoader(settings), analyzer="librosa")
+    assert (second.known, second.analyzed, second.computed_anything) == (1, 0, False) and BrokenClap.loads == 2
+
+    # torchaudio repariert: jetzt wird die Stimmung mit CLAP nachgerechnet, die Struktur nicht
+    monkeypatch.setattr("backend.analysis.loader.ClapMusicModel", FakeClap)
+    third = index_library(tracks, settings, engine, ModelLoader(settings), analyzer="librosa")
+    assert (third.analyzed, third.structure, third.mood) == (1, 0, 1)
+    assert set(_songs(settings)["Slow Love"].features["signals"]) == {"features", "clap"}
+
+
+def test_copies_count_once(library: Path, settings: Settings) -> None:
+    original = library / "Club" / "DJ Test - Drop Song.flac"
+    copy = settings.database.path.parent / "song.flac"
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(original, copy)
+    other = library / "Balladen" / "01 - slow.flac"
+    rows = [Song(path=str(copy), bpm=120.0, duration=60.0),
+            Song(path=str(original), bpm=120.0, duration=60.0, title="Drop Song", source="folder"),
+            Song(path=str(other), bpm=80.0, duration=60.0, title="Slow Love", source="folder"),
+            Song(path=str(library / "weg.flac"), bpm=80.0, duration=60.0)]
+    kept, copies = without_copies(rows)
+    assert [Path(r.path).name for r in kept] == ["DJ Test - Drop Song.flac", "01 - slow.flac", "weg.flac"]
+    assert [(Path(a.path).name, b.title) for a, b in copies] == [("song.flac", "Drop Song")]
 
 
 def test_filters_and_failures_are_remembered(library: Path, settings: Settings,
